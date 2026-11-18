@@ -1,13 +1,48 @@
-# TG漫画（TGComicReader）2.0
+# TG漫画（TGComicReader）
 
-一个只管一件事的安卓漫画阅读器：**吃 telegra.ph 链接，出书架 + 阅读器 + 可导出的链接记录**。
-2.0 版整体重做了视觉与布局 —— **液态玻璃（Liquid Glass）材质**，并补了一批实际操作里最缺的功能。
+安卓漫画阅读器：解析 **telegra.ph 图文页 / Telegram 消息与频道链接 / 图片直链**，出书架、阅读器、缓存与可导出的链接记录。
 
-针对的内容形态（实测样本 `docs/sample-page.html`）：
-`https://telegra.ph/...---Page-1-11-17`
-正文 `<article id="_tl_editor">` 里一串 `<img src="https://pic.850123.xyz/d/BQACAg...">`（Telegram file_id 形态的图床地址，**没有文件扩展名**）。
+## 下载
+
+最新版：[**v2.15 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+
+全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
+
+| 版本 | 内容 |
+|---|---|
+| [v1.0](https://github.com/AdaJyao/TGComicReader/releases/tag/v1.0) | 首个可用版本：telegra.ph 解析、书架、阅读器、导出 |
+| [v2.0](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.0) | 界面与功能大改：底部导航、搜索排序、详情页、链接记录 |
+| [v2.1](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.1) | 视觉返工：修复面板溢出、配色重调 |
+| [v2.2](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.2) | 主题可切换：墨蓝 / 纯黑 / 浅色 / 跟随系统 |
+| [v2.3](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.3) | 剪贴板识别修复、批量导入、手势、检查更新 |
+| [v2.4](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.4) | 配色体系重建、界面按主流漫画 App 重排 |
+| [v2.5](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.5) | 图标换成自绘矢量 |
+| [v2.6](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.6) | 支持 t.me 消息链接、频道页与图片直链 |
+| [v2.7](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.7) | 弃用液态玻璃，整体改为 Material 3 |
+| [v2.8](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.8) | 应用图标 + 修复版本号一直显示 1.0 |
+| [v2.9](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.9) | 三套主题配色重做（M3 tonal） |
+| [v2.10](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.10) | 图标按参考图重画 |
+| [v2.11](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.11) | 图标强制刷新缓存；点封面直读、点标题进详情 |
+| [v2.12](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.12) | 图标加粗；导入弹窗分层配色 |
+| [v2.13](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.13) | 图标改用原始图位图 |
+| [v2.14](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.14) | 图标矢量重绘（清晰 + 居中） |
+| [v2.15](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.15) | 图标第五版（定稿） |
+
+## 构建
+
+```
+# 需要 JDK 17+、Android SDK 35
+./gradlew assembleDebug
+# 产物：app/build/outputs/apk/debug/app-debug.apk
+```
+
+默认 `minSdk 26 / targetSdk 35`，Kotlin + Jetpack Compose（Material 3），无第三方 UI 依赖。
 
 ---
+
+# 开发记录
+
+下列章节按版本倒序记录每次改动的原因与实现细节。
 
 ## 2.0 做了什么
 
@@ -547,3 +582,4 @@ PNG 位图同步重生成（5 个密度 + 圆形版）。
 对比：`docs/screenshots-icon/10-compare-ref-vs-vector.png`（左原图、右矢量）、`09-launcher-vector.png`（桌面实际）。
 
 ![对比](docs/screenshots-icon/10-compare-ref-vs-vector.png)
+
