@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.15 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.17 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -27,6 +27,8 @@
 | [v2.13](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.13) | 图标改用原始图位图 |
 | [v2.14](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.14) | 图标矢量重绘（清晰 + 居中） |
 | [v2.15](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.15) | 图标第五版（定稿） |
+| [v2.16](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.16) | 图标换成金黑双层嵌套标记 |
+| [v2.17](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.17) | 支持 E-Hentai / ExHentai（含搜索页批量导入）、内置自动更新、修 7 个历史问题 |
 
 ## 构建
 
@@ -602,3 +604,63 @@ PNG 位图同步重生成（5 个密度 + 圆形版）。
 因为源图是 1536 的高清位图，缩到 48px 仍然清晰，不需要矢量重绘。
 
 截图：`docs/screenshots-icon/14-icon-v5-appinfo.png`、`15-icon-v5-source.png`（去水印后）、`16-icon-v5-48px.png`（48px 放大）。
+
+---
+
+## 2.17 修历史问题 + 接入 E-Hentai / ExHentai + 内置自动更新
+
+### 一、七个历史问题（都是能碰到的）
+
+| 问题 | 原因 | 修法 |
+|---|---|---|
+| 设置页版本号永远显示 2.4 | `ShelfScreen` 里写死了字符串 | 改读 `BuildConfig.VERSION_NAME / VERSION_CODE`（app 开了 `buildConfig`） |
+| 缓存 A 册时打开 B 册，B 的阅读器显示 A 的进度还能「取消」 | 阅读器收到的是全局 `cacheState`，没按册过滤 | `App.kt` 里跟详情页一样 `takeIf { it.comicId == c.id }` |
+| 多选「缓存」只缓存第一册 | `selected…firstOrNull()?.let(onCache)` | 新增 `onCacheMany`，`cacheComics()` 按顺序一册册下，进度显示「第 i/n 册」 |
+| 阅读器切换「左右翻页/连续滚动」会跳回进来时那页 | 两个容器各自 remember，初始值都是 start | 切模式前记下 `current`，切完把新容器 `scrollToItem/scrollToPage` 到同一页 |
+| 中文分卷标题不合并（"xxx 第2页"） | 合并时只认 `title.contains("Page")` | 统一走 `Titles.normalize()` 剥页码尾巴 |
+| 写到一半被杀会丢整个书架 | `library.json` 直接覆盖写 | 先写 `library.json.tmp` 再 rename（原子写） |
+| 单页漫画的进度条能拖到「第 2 页」 | `valueRange` 用了 `coerceAtLeast(1f)` | 只有 1 页时不显示滑块，显示「单页」 |
+| 长按封面进不了多选 | 封面自己有一层 `clickable`，把长按吃掉 | 封面改用 `combinedClickable(onClick = 读, onLongClick = 多选)` |
+
+顺带：`pages` 从普通 `MutableList` 换成 `SnapshotStateList`（后台解析出直链后界面自动刷新）；`cachedPageCount` 与 `pageModel` 统一用 **>1KB** 判断有效页；`Net.download` 失败时删掉半截文件（封禁页只有 243 字节，以前会留在缓存目录里被当成「已缓存」）；`IMAGE_RE` 去掉了 `$` 锚点——以前一段文字里**中间位置**的图片直链认不出来，只有结尾那条能识别，批量粘贴/分享时会漏。
+
+### 二、E-Hentai / ExHentai 源（`EhApi.kt`）
+
+支持四种入口，剪贴板/粘贴框/分享/ACTION_VIEW 全通用：
+
+| 输入 | 处理 |
+|---|---|
+| `https://e-hentai.org/g/<gid>/<token>/` | 画廊主页：标题、作者（artist/group，退化到 uploader）、页数、全部页地址；缩略图分页（`?p=1..`）自动翻完 |
+| `https://e-hentai.org/s/<hash>/<gid>-<n>` | 单页图片页，直接当成 1 页导入 |
+| `https://e-hentai.org/?f_search=xxx`、`/tag/…`、`/popular`、首页 | **批量识别**：先展开成多册（单页最多 15 册），再逐册解析，导入弹窗里可勾选 |
+| `https://exhentai.org/…` | 同上，但要带登录 Cookie |
+
+关键设计：
+
+- **书架里存的是 `/s/` 图片页地址，不是图片直链**。EH 直链带 `keystamp`（有时效），存下来过一阵就打不开；图片页地址是稳定的。真正读图 / 缓存时才换直链，`EhHub` 里带 6 分钟内存缓存。
+- 换直链失败（限速、封禁、网络）就在那一页显示具体原因 + 「点一下重试」，不会整册卡死。
+- 阅读器按页惰性解析，翻一页换一条直链，缓存整册时则先换再下。
+- **封面**：EH 缩略图是横排精灵图（一条图上并排 20 格），所以导入时把第一格裁出来存成 `filesDir/covers/<id>.jpg`，书架直接读本地文件 —— 不会出现「封面是一条拼贴」也不会因为直链过期变空。
+- **限速与封禁**：请求间隔 1.3s + 抖动；命中「temporarily banned」时解析剩余时间，全局闸门拦掉后续请求，界面上直接显示「E-Hentai 临时封禁了这个 IP：请求太频繁，还要等 N 分钟」。509 不重试。
+- `ExHentai` 必须登录：设置 →「来源」→ E-Hentai / ExHentai Cookie，填 `ipb_member_id=…; ipb_pass_hash=…; ignorant=1`。e-hentai.org 匿名可用。
+
+实测（Android 16 / API 36 模拟器，v2.17）：
+
+| 场景 | 结果 |
+|---|---|
+| 导入 `/g/4347024/…`（42 页） | 弹出预览：标题、`共 42 张图`、裁好的封面缩略图 |
+| 入库后书架 | 封面正常（单张、裁切居中）、`42 页 · 2%` |
+| 打开阅读器翻页 | 第 1、2 页都换成直链并正常显示，顶栏 `第 N / 42 页` |
+| 导入 `/?f_search=touhou` | 识别到 25 册 / 3537 页，列表可勾选后一键入库 |
+| 被封禁时的表现 | 导入弹窗与阅读器单页都显示「还要等 N 分钟」，可重试 |
+
+### 三、内置自动更新（`Updater.kt`）
+
+- 检查：GitHub Releases `releases/latest`（`api.github.com`），API 不通就退回 `releases/latest` 的 302 Location 取 tag。
+- 版本比较只看数字段（`1.10 > 1.9`），不比字符串。
+- 下载：`TGComicReader-<版本>.apk` → `cacheDir/updates/`，带进度条，下完提示「安装更新」。
+- 安装：`FileProvider` + `ACTION_VIEW(application/vnd.android.package-archive)`，需要用户允许「安装未知应用」（没允许会直接跳到系统设置页）。
+- 自动：默认开，启动时若距上次检查超过 12 小时就静默检查；有新版自动下载，然后弹一个「安装」按钮。
+- 边界：**Android 不允许应用静默装 APK**（除非设备管理员 / root），所以「自动更新」= 自动检查 + 自动下载，最后一步装由系统弹窗点一下。这是系统限制，不是没做。
+
+设置页新增：`来源`（E-Hentai Cookie / 解析来源）、`更新`（检查软件更新 / 自动更新开关）、`关于`（版本 / versionCode）。顶栏 `⋯` 菜单也能直接检查更新。

@@ -69,9 +69,9 @@ object TelegraphParser {
         setOf(RegexOption.IGNORE_CASE)
     )
 
-    /** 图片直链（以图片扩展名结尾） */
+    /** 图片直链（以图片扩展名结尾）。注意不要用 $ 锚定：一段文字中间也要能认出来 */
     private val IMAGE_RE = Regex(
-        """https?://[^\s"'<>）【】，,；;]+?\.(?:jpe?g|png|webp|gif|avif)(?:\?[^\s"'<>）【】，,；;]*)?$""",
+        """https?://[^\s"'<>）【】，,；;]+?\.(?:jpe?g|png|webp|gif|avif)(?:\?[^\s"'<>）【】，,；;]*)?""",
         setOf(RegexOption.IGNORE_CASE)
     )
 
