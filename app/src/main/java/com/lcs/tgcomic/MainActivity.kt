@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
     private var cacheJob: Job? = null
     private var clipJob: Job? = null
     private var updateJob: Job? = null
+    private var updateDownloadJob: Job? = null
     private var pendingApk: java.io.File? = null
     private var updateUi by mutableStateOf(UpdateUi())
     private var lastSaveAt = 0L
@@ -665,8 +666,10 @@ class MainActivity : ComponentActivity() {
 
     private fun startUpdateDownload() {
         val info = updateUi.info ?: return
-        if (updateJob?.isActive == true) return
-        updateJob = lifecycleScope.launch {
+        // 注意：这里不能复用 updateJob —— 自动更新时是在「检查」那个协程里调过来的，
+        // 用它做守卫会把自己挡掉，导致有新版也不自动下
+        if (updateDownloadJob?.isActive == true) return
+        updateDownloadJob = lifecycleScope.launch {
             updateUi = updateUi.copy(progress = 0f, ready = false, error = "")
             val apk = Updater.download(this@MainActivity, info) { done, total ->
                 updateUi = updateUi.copy(
