@@ -1,10 +1,12 @@
 package com.lcs.tgcomic
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +28,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -34,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -109,11 +113,10 @@ fun ReaderScreen(
         if (mode == ReaderMode.VERTICAL) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 itemsIndexed(comic.pages) { i, url ->
-                    val model = remember(i, url) { pageModel(ctx, comic.id, i, url) }
-                    AsyncImage(
-                        model = ImageRequest.Builder(ctx).data(model).crossfade(true).build(),
-                        contentDescription = "第${i + 1}页",
-                        modifier = Modifier
+                    var retry by remember(url) { mutableStateOf(0) }
+                    val load = rememberPageLoad(ctx, comic.id, i, url, prefs.ehCookie, retry)
+                    Box(
+                        Modifier
                             .fillMaxWidth()
                             .heightIn(min = 180.dp)
                             .pointerInput(i, url) {
@@ -129,9 +132,25 @@ fun ReaderScreen(
                                     onDoubleTap = { zoomPage = i },
                                     onLongPress = { onSavePage(i) }
                                 )
-                            },
-                        contentScale = ContentScale.FillWidth
-                    )
+                            }
+                    ) {
+                        val m = load.model
+                        if (m != null) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(ctx).data(m).crossfade(true).build(),
+                                contentDescription = "第${i + 1}页",
+                                modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.FillWidth
+                            )
+                        } else {
+                            PendingPage(
+                                index = i,
+                                failed = load.failed,
+                                message = load.message,
+                                onClick = { retry++ }
+                            )
+                        }
+                    }
                 }
             }
         } else {
@@ -140,29 +159,38 @@ fun ReaderScreen(
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 val url = comic.pages.getOrNull(page) ?: ""
-                val model = remember(page, url) { pageModel(ctx, comic.id, page, url) }
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(ctx).data(model).crossfade(true).build(),
-                        contentDescription = "第${page + 1}页",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(page, url) {
-                                detectTapGestures(
-                                    onTap = { pos ->
-                                        val w = size.width.toFloat()
-                                        when {
-                                            pos.x < w * 0.26f -> goto(page - 1)
-                                            pos.x > w * 0.74f -> goto(page + 1)
-                                            else -> showUi = !showUi
-                                        }
-                                    },
-                                    onDoubleTap = { zoomPage = page },
-                                    onLongPress = { onSavePage(page) }
-                                )
-                            },
-                        contentScale = ContentScale.Fit
-                    )
+                var retry by remember(url) { mutableStateOf(0) }
+                val load = rememberPageLoad(ctx, comic.id, page, url, prefs.ehCookie, retry)
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(page, url) {
+                            detectTapGestures(
+                                onTap = { pos ->
+                                    val w = size.width.toFloat()
+                                    when {
+                                        pos.x < w * 0.26f -> goto(page - 1)
+                                        pos.x > w * 0.74f -> goto(page + 1)
+                                        else -> showUi = !showUi
+                                    }
+                                },
+                                onDoubleTap = { zoomPage = page },
+                                onLongPress = { onSavePage(page) }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    val m = load.model
+                    if (m != null) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(ctx).data(m).crossfade(true).build(),
+                            contentDescription = "第${page + 1}页",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    } else {
+                        PendingPage(index = page, failed = load.failed, message = load.message, onClick = { retry++ })
+                    }
                 }
             }
         }
@@ -179,8 +207,6 @@ fun ReaderScreen(
                     .fillMaxWidth()
                     .statusBarsPadding()
                     .padding(horizontal = 10.dp, vertical = 8.dp)
-                    .clip(Glass.R24)
-                    .background(Glass.palette.surface.copy(alpha = 0.94f))
                     .liquidGlass(Glass.R24, cornerRadius = 26.dp, elevation = 16.dp, borderWidth = 1.dp)
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -230,28 +256,31 @@ fun ReaderScreen(
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .padding(horizontal = 10.dp, vertical = 8.dp)
-                    .clip(Glass.R24)
-                    .background(Glass.palette.surface.copy(alpha = 0.96f))
                     .liquidGlass(Glass.R24, cornerRadius = 26.dp, elevation = 16.dp, borderWidth = 1.dp)
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("${((dragValue ?: current.toFloat()) + 1).toInt()}", fontSize = 11.sp, color = Glass.Accent)
-                    Slider(
-                        value = dragValue ?: current.toFloat(),
-                        onValueChange = { dragValue = it },
-                        onValueChangeFinished = {
-                            dragValue?.let { goto(it.toInt()) }
-                            dragValue = null
-                        },
-                        valueRange = 0f..last.toFloat().coerceAtLeast(1f),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Glass.Accent,
-                            activeTrackColor = Glass.Accent,
-                            inactiveTrackColor = Glass.Track
-                        ),
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
-                    )
+                    if (last > 0) {
+                        Slider(
+                            value = (dragValue ?: current.toFloat()).coerceIn(0f, last.toFloat()),
+                            onValueChange = { dragValue = it.coerceIn(0f, last.toFloat()) },
+                            onValueChangeFinished = {
+                                dragValue?.let { goto(it.toInt()) }
+                                dragValue = null
+                            },
+                            valueRange = 0f..last.toFloat(),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Glass.Accent,
+                                activeTrackColor = Glass.Accent,
+                                inactiveTrackColor = Glass.Track
+                            ),
+                            modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                        Text("单页", fontSize = 10.sp, color = Glass.TextDim)
+                    }
                     Text("${comic.pages.size}", fontSize = 11.sp, color = Glass.TextDim)
                 }
                 Row(
@@ -303,7 +332,8 @@ fun ReaderScreen(
         // ── 放大层 ──
         zoomPage?.let { idx ->
             val url = comic.pages.getOrNull(idx) ?: ""
-            val model = remember(idx, url) { pageModel(ctx, comic.id, idx, url) }
+            var zRetry by remember(url) { mutableStateOf(0) }
+            val load = rememberPageLoad(ctx, comic.id, idx, url, prefs.ehCookie, zRetry)
             var zScale by remember(idx) { mutableStateOf(1f) }
             var zOffset by remember(idx) { mutableStateOf(Offset.Zero) }
             Box(
@@ -320,19 +350,24 @@ fun ReaderScreen(
                         detectTapGestures(onTap = { zoomPage = null })
                     }
             ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(ctx).data(model).crossfade(true).build(),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = zScale
-                            scaleY = zScale
-                            translationX = zOffset.x
-                            translationY = zOffset.y
-                        },
-                    contentScale = ContentScale.Fit
-                )
+                val zm = load.model
+                if (zm != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(ctx).data(zm).crossfade(true).build(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = zScale
+                                scaleY = zScale
+                                translationX = zOffset.x
+                                translationY = zOffset.y
+                            },
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    PendingPage(index = idx, failed = load.failed, message = load.message, onClick = { zRetry++ })
+                }
                 Row(
                     Modifier
                         .align(Alignment.TopCenter)
@@ -354,9 +389,14 @@ fun ReaderScreen(
         subtitle = comic.title
     ) { close ->
         GlassMenuItem("阅读方向：${mode.label}") {
+            // 先记下当前页，换容器后再滚过去，否则会跳回进来时那一页
+            val at = current
             mode = if (mode == ReaderMode.VERTICAL) ReaderMode.PAGED else ReaderMode.VERTICAL
             prefs.readerMode = mode
             close()
+            scope.launch {
+                if (mode == ReaderMode.VERTICAL) listState.scrollToItem(at) else pagerState.scrollToPage(at)
+            }
         }
         GlassMenuItem("底色：${bg.label}") {
             bg = when (bg) {
@@ -399,5 +439,76 @@ fun ReaderScreen(
                 onCache()
             }
         }
+    }
+}
+
+// ══════════════ 单页加载（E-Hentai 的图片页要先换成直链） ══════════════
+
+private data class PageLoad(
+    val model: Any? = null,
+    val failed: Boolean = false,
+    val message: String = ""
+)
+
+/**
+ * 返回这一页可渲染的 model：
+ *  - 已经整册缓存 → 本地文件
+ *  - telegra.ph / t.me / 图片直链 → 原 URL
+ *  - E-Hentai 图片页 → 异步换直链（EhHub 有 6 分钟缓存），失败可点着重试
+ */
+@Composable
+private fun rememberPageLoad(
+    ctx: Context,
+    comicId: String,
+    index: Int,
+    url: String,
+    cookie: String,
+    retry: Int
+): PageLoad {
+    val cached = remember(index, url) { pageModel(ctx, comicId, index, url) }
+    val pending = remember(url) { isPendingPage(url) }
+    val state = produceState<PageLoad>(
+        initialValue = if (cached is java.io.File) PageLoad(cached) else PageLoad(),
+        key1 = url,
+        key2 = retry
+    ) {
+        if (cached is java.io.File) {
+            value = PageLoad(cached)
+            return@produceState
+        }
+        if (!pending) {
+            value = PageLoad(cached)
+            return@produceState
+        }
+        value = PageLoad()
+        val res = runCatching { EhHub.direct(url, cookie) }
+        val direct = res.getOrNull()
+        value = if (direct != null) PageLoad(direct)
+        else PageLoad(failed = true, message = res.exceptionOrNull()?.message.orEmpty())
+    }
+    return state.value
+}
+
+@Composable
+private fun PendingPage(index: Int, failed: Boolean, message: String = "", onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 220.dp)
+            .then(if (failed) Modifier.clickable { onClick() } else Modifier),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        if (!failed) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Glass.Accent)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (failed) message.ifBlank { "第 ${index + 1} 页没取到图片，点一下重试" }
+            else "第 ${index + 1} 页 · 正在解析直链…",
+            fontSize = 11.sp,
+            color = if (failed) Glass.Warn else Glass.TextDim,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
     }
 }

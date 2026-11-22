@@ -63,6 +63,12 @@ object TelegraphParser {
         setOf(RegexOption.IGNORE_CASE)
     )
 
+    /** e-hentai / exhentai 链接（画廊 / 图片页 / 搜索列表页） */
+    private val EH_RE = Regex(
+        """https?://(?:e-hentai\.org|exhentai\.org|e-hentai\.moe|e-hentai\.eu)/[^\s"'<>）【】，,；;]*""",
+        setOf(RegexOption.IGNORE_CASE)
+    )
+
     /** 图片直链（以图片扩展名结尾） */
     private val IMAGE_RE = Regex(
         """https?://[^\s"'<>）【】，,；;]+?\.(?:jpe?g|png|webp|gif|avif)(?:\?[^\s"'<>）【】，,；;]*)?$""",
@@ -73,7 +79,8 @@ object TelegraphParser {
         val url: String,
         val title: String,
         val author: String,
-        val images: List<String>
+        val images: List<String>,
+        val cover: String = ""
     )
 
     /** 从任意文本里找第一个可解析链接 */
@@ -82,7 +89,7 @@ object TelegraphParser {
     /** 从任意文本里找全部可导入链接（telegra.ph / t.me / 图片直链），按出现顺序去重 */
     fun findAllUrls(text: String): List<String> {
         val found = mutableListOf<Pair<Int, String>>()
-        for (re in listOf(TELEGRAPH_RE, TG_RE, IMAGE_RE)) {
+        for (re in listOf(TELEGRAPH_RE, TG_RE, EH_RE, IMAGE_RE)) {
             for (m in re.findAll(text)) {
                 found.add(m.range.first to cleanUrl(m.value))
             }
@@ -94,7 +101,7 @@ object TelegraphParser {
         raw.trim().trimEnd('》', '。', '.', ',', ')', '）', ']', '】', '"', '\'', '，', ';', '；')
 
     fun isSupported(url: String): Boolean =
-        TELEGRAPH_RE.containsMatchIn(url) || isTgLink(url) || isImageUrl(url)
+        TELEGRAPH_RE.containsMatchIn(url) || isTgLink(url) || isImageUrl(url) || EhApi.isEh(url)
 
     /** t.me 消息 / 频道链接 */
     fun isTgLink(url: String): Boolean =

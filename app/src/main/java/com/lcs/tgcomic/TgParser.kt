@@ -19,7 +19,8 @@ object TgParser {
 
     private val POST_MARK = Regex("""data-post="([^"]+)"""")
     private val PHOTO_BG = Regex(
-        """url\((?:&#39;|'|")(https?://[^)'"&]+)(?:&#39;|'|")\)""",
+        // 允许 &（EH/TG 的 CDN 链接常带查询参数），只在引号/右括号处断开
+        """url\((['"]?)(https?://[^)'"]+)\1\)""",
         setOf(RegexOption.IGNORE_CASE)
     )
     private val TEXT_BLOCK = Regex(

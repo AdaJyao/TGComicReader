@@ -77,12 +77,14 @@ fun ShelfScreen(
     onRename: (String, String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onCache: (Comic) -> Unit,
+    onCacheMany: (List<Comic>) -> Unit,
     onCancelCache: () -> Unit,
     onClearCache: (Comic) -> Unit,
     onRetryLink: (String) -> Unit,
     onClearLinks: () -> Unit,
     onRemoveLink: (String) -> Unit,
     onCheckUpdates: () -> Unit,
+    onCheckAppUpdate: () -> Unit,
     onShareComic: (Comic) -> Unit,
     onCopyImageLink: (Comic, Int) -> Unit
 ) {
@@ -274,6 +276,7 @@ fun ShelfScreen(
                     onClearAllCache = { lib.comics.forEach(onClearCache) },
                     onClearLinks = { showClearLinks = true },
                     onCheckUpdates = onCheckUpdates,
+                    onCheckAppUpdate = onCheckAppUpdate,
                     onExport = onExport
                 )
             }
@@ -290,7 +293,7 @@ fun ShelfScreen(
                     selected = if (selected.size == shown.size) emptySet() else shown.map { it.id }.toSet()
                 },
                 onCache = {
-                    selected.mapNotNull { id -> lib.comics.firstOrNull { it.id == id } }.firstOrNull()?.let(onCache)
+                    onCacheMany(selected.mapNotNull { id -> lib.comics.firstOrNull { it.id == id } })
                 },
                 onExport = { onExport(ExportKind.TXT, selected) },
                 onDelete = { confirmDelete = selected },
@@ -343,6 +346,10 @@ fun ShelfScreen(
         GlassMenuItem("检查更新（重新抓取全部来源）") {
             close()
             onCheckUpdates()
+        }
+        GlassMenuItem("检查软件更新") {
+            close()
+            onCheckAppUpdate()
         }
         GlassMenuDivider()
         GlassMenuItem("${ExportKind.JSON.short} · 书架 JSON") {
@@ -534,8 +541,8 @@ private fun ComicTile(
     onMenu: () -> Unit
 ) {
     val ctx = LocalContext.current
-    val cover = remember(comic.id, comic.pages.firstOrNull()) {
-        pageModel(ctx, comic.id, 0, comic.pages.firstOrNull() ?: "")
+    val cover = remember(comic.id, comic.cover, comic.pages.firstOrNull()) {
+        coverModel(ctx, comic)
     }
     val progress = if (comic.pages.isEmpty()) 0f
     else (comic.lastIndex + 1).toFloat() / comic.pages.size
@@ -552,7 +559,8 @@ private fun ComicTile(
                 .fillMaxWidth()
                 .aspectRatio(0.74f)
                 .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
-                .clickable { onRead() }
+                // 封面要自己处理长按，否则内层 clickable 会把「长按进多选」吃掉
+                .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
             AsyncImage(
                 model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(),
@@ -676,8 +684,8 @@ private fun ComicRow(
     onMenu: () -> Unit
 ) {
     val ctx = LocalContext.current
-    val cover = remember(comic.id, comic.pages.firstOrNull()) {
-        pageModel(ctx, comic.id, 0, comic.pages.firstOrNull() ?: "")
+    val cover = remember(comic.id, comic.cover, comic.pages.firstOrNull()) {
+        coverModel(ctx, comic)
     }
     val progress = if (comic.pages.isEmpty()) 0f
     else (comic.lastIndex + 1).toFloat() / comic.pages.size
@@ -697,7 +705,7 @@ private fun ComicRow(
                 .height(86.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .border(1.dp, Glass.MediaStroke, RoundedCornerShape(12.dp))
-                .clickable { onRead() }
+                .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
             AsyncImage(
                 model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(),
@@ -1006,12 +1014,15 @@ private fun SettingsContent(
     onClearAllCache: () -> Unit,
     onClearLinks: () -> Unit,
     onCheckUpdates: () -> Unit,
+    onCheckAppUpdate: () -> Unit,
     onExport: (ExportKind, Set<String>?) -> Unit
 ) {
     var readerMode by remember { mutableStateOf(prefs.readerMode) }
     var readerBg by remember { mutableStateOf(prefs.readerBg) }
-    val tick by remember { mutableStateOf(0) }
-    @Suppress("UNUSED_VARIABLE") val t = lib.tick.value
+    var autoUpdate by remember { mutableStateOf(prefs.autoUpdate) }
+    var ehCookieSet by remember { mutableStateOf(prefs.ehCookie.isNotBlank()) }
+    var showEhCookie by remember { mutableStateOf(false) }
+    @Suppress("UNUSED_VARIABLE") val tickVersion = lib.tick.value
     val cachedTotal = lib.comics.sumOf { lib.cachedPageCount(it.id) }
     val totalPages = lib.comics.sumOf { it.pages.size }
 
@@ -1064,6 +1075,16 @@ private fun SettingsContent(
             }
         }
 
+        item { SectionHeader("来源") }
+        item {
+            SettingRow(
+                "E-Hentai / ExHentai Cookie",
+                value = if (ehCookieSet) "已设置" else "未设置",
+                onClick = { showEhCookie = true }
+            )
+        }
+        item { SettingRow("解析来源", "telegra.ph · t.me · e-hentai/exhentai · 图片直链") }
+
         item { SectionHeader("书库") }
         item { SettingRow("册数", "${lib.comics.size} 册") }
         item { SettingRow("总页数", "$totalPages 页") }
@@ -1076,9 +1097,41 @@ private fun SettingsContent(
         item { SettingRow("清空全部缓存", onClick = onClearAllCache) }
         item { SettingRow("清空链接记录", danger = true, onClick = onClearLinks) }
 
+        item { SectionHeader("更新") }
+        item {
+            SettingRow(
+                "检查软件更新",
+                value = "当前 v${BuildConfig.VERSION_NAME}",
+                onClick = onCheckAppUpdate
+            )
+        }
+        item {
+            SettingRow(
+                "自动更新：${if (autoUpdate) "开" else "关"}",
+                value = if (autoUpdate) "下载后提示安装" else "手动检查",
+                onClick = {
+                    autoUpdate = !autoUpdate
+                    prefs.autoUpdate = autoUpdate
+                }
+            )
+        }
+
         item { SectionHeader("关于") }
-        item { SettingRow("版本", "2.4") }
-        item { SettingRow("解析来源", "telegra.ph 图文页") }
+        item { SettingRow("版本", BuildConfig.VERSION_NAME) }
+        item { SettingRow("构建", "versionCode ${BuildConfig.VERSION_CODE}") }
+    }
+
+    if (showEhCookie) {
+        EhCookieDialog(
+            initial = prefs.ehCookie,
+            onDismiss = { showEhCookie = false },
+            onConfirm = { v ->
+                prefs.ehCookie = v
+                EhHub.clearAll()
+                ehCookieSet = v.isNotBlank()
+                showEhCookie = false
+            }
+        )
     }
 }
 

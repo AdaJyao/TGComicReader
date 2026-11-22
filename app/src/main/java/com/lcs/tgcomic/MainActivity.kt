@@ -29,6 +29,11 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
+    private companion object {
+        /** 一次导入最多处理多少个页面/画廊，防止列表页展开后跑飞 */
+        const val MAX_BATCH_TARGETS = 60
+    }
+
     private lateinit var lib: Library
     private lateinit var prefs: Prefs
 
@@ -42,6 +47,9 @@ class MainActivity : ComponentActivity() {
 
     private var cacheJob: Job? = null
     private var clipJob: Job? = null
+    private var updateJob: Job? = null
+    private var pendingApk: java.io.File? = null
+    private var updateUi by mutableStateOf(UpdateUi())
     private var lastSaveAt = 0L
     private var pendingExport: Pair<ExportKind, Set<String>?>? = null
 
@@ -94,6 +102,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onExport = { kind, ids -> ensureAndExport(kind, ids) },
                     onCache = { c -> cacheComic(c) },
+                    onCacheMany = { list -> cacheComics(list) },
                     onCancelCache = { cancelCache() },
                     onSavePage = { c, i -> savePage(c, i) },
                     onProgress = { c, i ->
@@ -135,14 +144,20 @@ class MainActivity : ComponentActivity() {
                     },
                     onBrightness = { v -> setBrightness(v) },
                     onCheckUpdates = { checkUpdates() },
+                    onCheckAppUpdate = { checkAppUpdate(silent = false) },
                     onShareComic = { c -> shareComic(c) },
                     onCopyImageLink = { c, i -> copyImageLink(c, i) },
+                    update = updateUi,
+                    onUpdateAccept = { startUpdateDownload() },
+                    onUpdateInstall = { installUpdate() },
+                    onUpdateDismiss = { updateUi = UpdateUi() },
                     onClearMessage = { message = "" }
                 )
             }
         }
 
         handleIntent(intent)
+        maybeAutoCheckUpdate()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -232,15 +247,59 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun loadArticle(url: String): TelegraphParser.Article = withContext(Dispatchers.IO) {
         when {
+            EhApi.isGalleryPage(url) -> loadEhGallery(url)
+            EhApi.isListPage(url) -> throw IllegalStateException("这是 E-Hentai 列表页，需要先展开成多册")
             TelegraphParser.isTgLink(url) -> loadTelegram(url)
             TelegraphParser.isImageUrl(url) -> TelegraphParser.Article(
                 url = url,
-                title = "图片直链",
+                // 用文件名当标题，别让所有直链都叫「图片直链」被合并成一册
+                title = url.substringAfterLast('/').substringBefore('?').ifBlank { "图片直链" },
                 author = "",
                 images = listOf(url)
             )
             else -> loadTelegraph(url)
         }
+    }
+
+    /** E-Hentai / ExHentai 画廊：取每页的图片页地址，直链在读图/缓存时才换（keystamp 有时效） */
+    private suspend fun loadEhGallery(url: String): TelegraphParser.Article {
+        val g = EhApi.loadGallery(url, prefs.ehCookie) { done, total ->
+            importState = ImportState.Loading(url, total.coerceAtLeast(1), done)
+        }
+        // EH 的缩略图是横排精灵图，本地裁出第一格当封面（地址有时效，存本地最稳）
+        val cover = withContext(Dispatchers.IO) { makeCover(g.url, g.cover, g.coverW, g.coverH) }
+        return TelegraphParser.Article(g.url, g.title, g.author, g.pageUrls, cover.ifBlank { g.cover })
+    }
+
+    /** 精灵图裁第一格 → filesDir/covers/<id>.jpg，返回 file:// 地址 */
+    private fun makeCover(comicUrl: String, sprite: String, cellW: Int, cellH: Int): String {
+        if (sprite.isBlank()) return ""
+        return runCatching {
+            val dir = java.io.File(filesDir, "covers").apply { mkdirs() }
+            val out = java.io.File(dir, "${comicIdOf(comicUrl)}.jpg")
+            if (out.exists() && out.length() > 1024) return "file://" + out.absolutePath
+
+            val conn = java.net.URL(sprite).openConnection() as java.net.HttpURLConnection
+            val bytes = try {
+                conn.connectTimeout = 15000
+                conn.readTimeout = 20000
+                conn.setRequestProperty("User-Agent", UA)
+                conn.setRequestProperty("Referer", Net.autoReferer(sprite))
+                conn.inputStream.use { it.readBytes() }
+            } finally {
+                conn.disconnect()
+            }
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return ""
+            val w = cellW.coerceIn(1, bmp.width)
+            val h = cellH.coerceIn(1, bmp.height)
+            val cell = android.graphics.Bitmap.createBitmap(bmp, 0, 0, w, h)
+            java.io.FileOutputStream(out).use {
+                cell.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it)
+            }
+            if (cell !== bmp) cell.recycle()
+            bmp.recycle()
+            "file://" + out.absolutePath
+        }.getOrDefault("")
     }
 
     /** telegra.ph 图文页（含页面内“下一页”追踪） */
@@ -299,16 +358,42 @@ class MainActivity : ComponentActivity() {
     private fun startImport(urls: List<String>) {
         val list = urls.distinct().filter { TelegraphParser.isSupported(it) }
         if (list.isEmpty()) {
-            message = "没识别到 telegra.ph 链接"
+            message = "没识别到可导入的链接"
             return
         }
         clipLinks = emptyList()
         lifecycleScope.launch {
-            importState = ImportState.Loading(list.first(), list.size)
+            importState = ImportState.Loading(list.first(), list.size, 0)
+
+            // E-Hentai 的搜索 / 标签 / 首页列表页：先展开成一批画廊链接（批量识别）
+            val work = mutableListOf<String>()
+            for ((i, u) in list.withIndex()) {
+                if (!EhApi.isListPage(u)) {
+                    work.add(u)
+                    continue
+                }
+                importState = ImportState.Loading(u, list.size, i)
+                val refs = try {
+                    EhApi.expandList(u, prefs.ehCookie)
+                } catch (e: Exception) {
+                    lib.addLink(u, "E-Hentai 列表页", "fail", e.message ?: "列表展开失败")
+                    emptyList()
+                }
+                if (refs.isEmpty()) {
+                    if (lib.links.none { it.url == u }) {
+                        lib.addLink(u, "E-Hentai 列表页", "fail", "没解析到画廊")
+                    }
+                } else {
+                    work.addAll(refs.map { it.url })
+                }
+            }
+            val targets = work.distinct().take(MAX_BATCH_TARGETS)
+
             val parsed = mutableListOf<Parsed>()
             var lastErr = ""
             var failedUrl = ""
-            for (u in list) {
+            for ((i, u) in targets.withIndex()) {
+                importState = ImportState.Loading(u, targets.size, i)
                 try {
                     val art = loadArticle(u)
                     if (art.images.isEmpty()) {
@@ -316,7 +401,7 @@ class MainActivity : ComponentActivity() {
                         failedUrl = u
                         lib.addLink(u, art.title, "fail", lastErr)
                     } else {
-                        parsed.add(Parsed(u, art.title, art.author, art.images))
+                        parsed.add(Parsed(u, art.title, art.author, art.images, art.cover))
                     }
                 } catch (e: Exception) {
                     lastErr = e.message ?: "网络或解析异常"
@@ -334,7 +419,7 @@ class MainActivity : ComponentActivity() {
             var created = 0
             var merged = 0
             for (p in items) {
-                val (_, added, isNew) = lib.upsert(p.title, p.url, p.images, p.author)
+                val (_, added, isNew) = lib.upsert(p.title, p.url, p.images, p.author, p.cover)
                 if (isNew) {
                     created++
                     lib.addLink(p.url, p.title, "ok", "${p.images.size} 页")
@@ -392,27 +477,56 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- 缓存 ----------------
 
-    private fun cacheComic(c: Comic) {
-        if (cacheState != null) return
+    private fun cacheComic(c: Comic) = cacheComics(listOf(c))
+
+    /** 批量缓存：按顺序一册一册下，进度按当前这册显示（多册时显示 第 i/n 册） */
+    private fun cacheComics(targets: List<Comic>) {
+        if (cacheState != null) {
+            message = "已经在缓存了，等这一轮结束"
+            return
+        }
+        val list = targets.filter { it.pages.isNotEmpty() }
+        if (list.isEmpty()) {
+            message = "这些册子没有可缓存的页面"
+            return
+        }
         cacheJob?.cancel()
         cacheJob = lifecycleScope.launch {
-            val total = c.pages.size
-            if (total == 0) return@launch
-            cacheState = CacheState(c.id, 0, total)
-            var ok = 0
-            for ((i, url) in c.pages.withIndex()) {
-                if (!isActive) break
-                val f = lib.pageFile(c.id, i)
-                val good = if (f.exists() && f.length() > 1024) true
-                else withContext(Dispatchers.IO) { Net.download(url, f) }
-                if (good) ok++
-                cacheState = CacheState(c.id, i + 1, total)
+            var okTotal = 0
+            var finished = 0
+            val pagesTotal = list.sumOf { it.pages.size }
+            for ((ci, c) in list.withIndex()) {
+                val total = c.pages.size
+                var ok = 0
+                for ((i, url) in c.pages.withIndex()) {
+                    if (!isActive) break
+                    val f = lib.pageFile(c.id, i)
+                    cacheState = CacheState(c.id, i, total, c.title, ci + 1, list.size)
+                    // EH 解析可能抛异常（限速/封禁/网络），这里必须兜住，否则整个缓存任务会被打断
+                    val direct = runCatching { resolveIfNeeded(c, i) }.getOrNull()
+                    val good = if (f.exists() && f.length() > 1024) true
+                    else withContext(Dispatchers.IO) { Net.download(direct ?: url, f) }
+                    if (good) ok++
+                    cacheState = CacheState(c.id, i + 1, total, c.title, ci + 1, list.size)
+                }
+                okTotal += ok
+                if (isActive) finished++
             }
             val cancelled = !isActive
             cacheState = null
             lib.tick.value++
-            if (!cancelled) message = "已缓存 $ok/$total 页，可离线阅读"
+            if (!cancelled) {
+                message = if (list.size == 1) "已缓存 $okTotal/$pagesTotal 页，可离线阅读"
+                else "已缓存 $finished 册 · $okTotal/$pagesTotal 页"
+            }
         }
+    }
+
+    /** EH 图片页在缓存前先解析成直链；其它来源原样返回（解析失败返回 null → 退回原始 URL） */
+    private suspend fun resolveIfNeeded(c: Comic, i: Int): String? = withContext(Dispatchers.IO) {
+        val url = c.pages.getOrNull(i) ?: return@withContext null
+        // 只换直链，不改写 pages：图片页地址才是长期有效的身份
+        EhHub.direct(url, prefs.ehCookie)
     }
 
     private fun cancelCache() {
@@ -495,7 +609,8 @@ class MainActivity : ComponentActivity() {
             message = "保存第 ${index + 1} 页…"
             val f = lib.pageFile(c.id, index)
             val ok = withContext(Dispatchers.IO) {
-                if (f.exists() && f.length() > 1024) true else Net.download(url, f)
+                if (f.exists() && f.length() > 1024) true
+                else Net.download(runCatching { resolveIfNeeded(c, index) }.getOrNull() ?: url, f)
             }
             if (!ok) {
                 message = "图片下载失败"
@@ -521,6 +636,61 @@ class MainActivity : ComponentActivity() {
             lib.tick.value++
             message = "第 ${index + 1} 页已保存到 $where"
         }
+    }
+
+    // ---------------- 软件更新 ----------------
+
+    /** 启动时静默检查：自动更新开启且距上次检查超过 12 小时 */
+    private fun maybeAutoCheckUpdate() {
+        if (!prefs.autoUpdate) return
+        if (System.currentTimeMillis() - prefs.lastUpdateCheck < 12 * 3600_000L) return
+        checkAppUpdate(silent = true)
+    }
+
+    private fun checkAppUpdate(silent: Boolean) {
+        if (updateJob?.isActive == true) return
+        updateJob = lifecycleScope.launch {
+            if (!silent) message = "正在检查软件更新…"
+            val info = Updater.check(BuildConfig.VERSION_NAME)
+            prefs.lastUpdateCheck = System.currentTimeMillis()
+            if (info == null) {
+                if (!silent) message = "已经是最新版本 v${BuildConfig.VERSION_NAME}"
+                return@launch
+            }
+            updateUi = UpdateUi(info = info)
+            message = "发现新版本 ${info.tag}"
+            if (prefs.autoUpdate) startUpdateDownload()
+        }
+    }
+
+    private fun startUpdateDownload() {
+        val info = updateUi.info ?: return
+        if (updateJob?.isActive == true) return
+        updateJob = lifecycleScope.launch {
+            updateUi = updateUi.copy(progress = 0f, ready = false, error = "")
+            val apk = Updater.download(this@MainActivity, info) { done, total ->
+                updateUi = updateUi.copy(
+                    progress = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else null
+                )
+            }
+            if (apk == null) {
+                updateUi = updateUi.copy(progress = null, error = "下载失败，稍后再试")
+                return@launch
+            }
+            pendingApk = apk
+            updateUi = updateUi.copy(progress = 1f, ready = true)
+            message = "新版本已下载，点「安装更新」"
+        }
+    }
+
+    private fun installUpdate() {
+        val apk = pendingApk ?: return
+        if (!Updater.canInstall(this)) {
+            message = "请先允许「安装未知应用」"
+            Updater.openInstallPermission(this)
+            return
+        }
+        if (!Updater.install(this, apk)) message = "打不开系统安装器"
     }
 
     // ---------------- 杂项 ----------------

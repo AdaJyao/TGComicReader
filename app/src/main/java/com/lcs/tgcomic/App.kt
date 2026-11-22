@@ -44,21 +44,38 @@ data class Parsed(
     val url: String,
     val title: String,
     val author: String,
-    val images: List<String>
+    val images: List<String>,
+    val cover: String = ""
 ) {
     val host: String get() = runCatching { java.net.URI(url).host ?: "" }.getOrDefault("")
 }
 
 sealed interface ImportState {
     data object Idle : ImportState
-    data class Loading(val url: String, val total: Int) : ImportState
+    data class Loading(val url: String, val total: Int, val done: Int = 0) : ImportState
     data class Ready(val items: List<Parsed>) : ImportState
     data class Failed(val message: String, val url: String = "") : ImportState
 }
 
-data class CacheState(val comicId: String, val done: Int, val total: Int) {
+data class CacheState(
+    val comicId: String,
+    val done: Int,
+    val total: Int,
+    val title: String = "",
+    val queueIndex: Int = 1,
+    val queueTotal: Int = 1
+) {
     val progress: Float get() = if (total <= 0) 0f else done.toFloat() / total
 }
+
+/** 软件更新状态（info 为空表示没有新版本） */
+data class UpdateUi(
+    val info: Updater.Info? = null,
+    /** null = 没在下载；0..1 = 下载进度 */
+    val progress: Float? = null,
+    val ready: Boolean = false,
+    val error: String = ""
+)
 
 enum class ExportKind(val label: String, val short: String, val mime: String, val ext: String) {
     JSON("导出书架 JSON", "JSON", "application/json", "json"),
@@ -84,6 +101,15 @@ fun pageModel(ctx: Context, comicId: String, index: Int, url: String): Any {
     val f = File(File(File(ctx.filesDir, "comics"), comicId), "%04d.img".format(index))
     return if (f.exists() && f.length() > 1024) f else url
 }
+
+/** 封面：优先用存下来的缩略图（EH），否则退回第一页 */
+fun coverModel(ctx: Context, comic: Comic): Any {
+    if (comic.cover.isNotBlank()) return comic.cover
+    return pageModel(ctx, comic.id, 0, comic.pages.firstOrNull() ?: "")
+}
+
+/** 这一页还是 EH 图片页，需要先换直链才能显示 */
+fun isPendingPage(url: String): Boolean = EhApi.needsResolve(url)
 
 fun statusLabel(s: String): String = when (s) {
     "ok" -> "已入书架"
@@ -120,6 +146,7 @@ fun AppRoot(
     onNavigate: (Screen) -> Unit,
     onExport: (ExportKind, Set<String>?) -> Unit,
     onCache: (Comic) -> Unit,
+    onCacheMany: (List<Comic>) -> Unit,
     onCancelCache: () -> Unit,
     onSavePage: (Comic, Int) -> Unit,
     onProgress: (Comic, Int) -> Unit,
@@ -132,8 +159,13 @@ fun AppRoot(
     onRemoveLink: (String) -> Unit,
     onBrightness: (Float) -> Unit,
     onCheckUpdates: () -> Unit,
+    onCheckAppUpdate: () -> Unit,
     onShareComic: (Comic) -> Unit,
     onCopyImageLink: (Comic, Int) -> Unit,
+    update: UpdateUi,
+    onUpdateAccept: () -> Unit,
+    onUpdateInstall: () -> Unit,
+    onUpdateDismiss: () -> Unit,
     onClearMessage: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -154,12 +186,14 @@ fun AppRoot(
                 onRename = onRename,
                 onToggleFavorite = onToggleFavorite,
                 onCache = onCache,
+                onCacheMany = onCacheMany,
                 onCancelCache = onCancelCache,
                 onClearCache = onClearCache,
                 onRetryLink = onRetryLink,
                 onClearLinks = onClearLinks,
                 onRemoveLink = onRemoveLink,
                 onCheckUpdates = onCheckUpdates,
+                onCheckAppUpdate = onCheckAppUpdate,
                 onShareComic = onShareComic,
                 onCopyImageLink = onCopyImageLink
             )
@@ -195,7 +229,7 @@ fun AppRoot(
                     ReaderScreen(
                         comic = c,
                         prefs = prefs,
-                        cacheState = cacheState,
+                        cacheState = cacheState?.takeIf { it.comicId == c.id },
                         initialIndex = screen.startIndex,
                         onBack = { onNavigate(Screen.Shelf) },
                         onProgress = { onProgress(c, it) },
@@ -214,6 +248,13 @@ fun AppRoot(
 
         ImportDialogs(importState, onConfirmImport, onCloseImport, onRetryLink)
         ClipDialog(clipLinks, onImport, onDismissClip)
+
+        UpdateDialog(
+            ui = update,
+            onAccept = onUpdateAccept,
+            onInstall = onUpdateInstall,
+            onDismiss = onUpdateDismiss
+        )
 
         LaunchedEffect(message) {
             if (message.isNotBlank()) {

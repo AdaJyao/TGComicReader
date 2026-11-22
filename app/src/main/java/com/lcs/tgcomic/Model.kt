@@ -19,12 +19,15 @@ data class Comic(
     val id: String,
     var title: String,
     val sourceUrl: String,
-    val pages: MutableList<String> = mutableListOf(),
+    // 用 SnapshotStateList：EH 图片页在后台解析成直链时，界面能自动重组
+    val pages: MutableList<String> = mutableStateListOf(),
     var lastIndex: Int = 0,
     var addedAt: Long = System.currentTimeMillis(),
     var author: String = "",
     var updatedAt: Long = System.currentTimeMillis(),
-    var favorite: Boolean = false
+    var favorite: Boolean = false,
+    /** 封面缩略图直链（EH 用画廊缩略图；为空则用第一页） */
+    var cover: String = ""
 )
 
 /** 分享/粘贴/剪贴板进来的链接记录（列表类） */
@@ -131,6 +134,21 @@ class Prefs(ctx: Context) {
     var keepScreenOn: Boolean
         get() = sp.getBoolean("keepOn", true)
         set(v) = sp.edit().putBoolean("keepOn", v).apply()
+
+    /** ExHentai / E-Hentai 登录 Cookie（ipb_member_id=...; ipb_pass_hash=...; ignorant=1） */
+    var ehCookie: String
+        get() = sp.getString("ehCookie", "") ?: ""
+        set(v) = sp.edit().putString("ehCookie", v.trim()).apply()
+
+    /** 自动检查并下载新版本（安装仍需系统确认） */
+    var autoUpdate: Boolean
+        get() = sp.getBoolean("autoUpdate", true)
+        set(v) = sp.edit().putBoolean("autoUpdate", v).apply()
+
+    /** 上次检查更新的时间戳 */
+    var lastUpdateCheck: Long
+        get() = sp.getLong("lastUpdateCheck", 0L)
+        set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
 }
 
 class Library(private val ctx: Context) {
@@ -155,7 +173,7 @@ class Library(private val ctx: Context) {
             val arr = root.optJSONArray("comics") ?: JSONArray()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                val pages = mutableListOf<String>()
+                val pages = mutableStateListOf<String>()
                 val pa = o.optJSONArray("pages") ?: JSONArray()
                 for (j in 0 until pa.length()) pages.add(pa.getString(j))
                 comics.add(
@@ -168,7 +186,8 @@ class Library(private val ctx: Context) {
                         addedAt = o.optLong("addedAt", System.currentTimeMillis()),
                         author = o.optString("author", ""),
                         updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
-                        favorite = o.optBoolean("favorite", false)
+                        favorite = o.optBoolean("favorite", false),
+                        cover = o.optString("cover", "")
                     )
                 )
             }
@@ -212,6 +231,7 @@ class Library(private val ctx: Context) {
                     put("updatedAt", c.updatedAt)
                     put("author", c.author)
                     put("favorite", c.favorite)
+                    put("cover", c.cover)
                     put("pages", JSONArray(c.pages))
                 }
             )
@@ -227,7 +247,15 @@ class Library(private val ctx: Context) {
             )
         }
         root.put("links", la)
-        runCatching { file.writeText(root.toString(2), Charsets.UTF_8) }
+        // 原子写：先写 .tmp 再 rename，避免写一半被杀掉留下残文件导致整库丢失
+        runCatching {
+            val tmp = File(ctx.filesDir, "library.json.tmp")
+            tmp.writeText(root.toString(2), Charsets.UTF_8)
+            if (!tmp.renameTo(file)) {
+                file.writeText(root.toString(2), Charsets.UTF_8)
+                tmp.delete()
+            }
+        }
     }
 
     // ---------------- 业务 ----------------
@@ -255,7 +283,8 @@ class Library(private val ctx: Context) {
         title: String,
         url: String,
         pages: List<String>,
-        author: String
+        author: String,
+        cover: String = ""
     ): Triple<Comic, Int, Boolean> {
         val exist = findSameVolume(title)
         if (exist == null) {
@@ -263,8 +292,9 @@ class Library(private val ctx: Context) {
                 id = comicIdOf(url),
                 title = title,
                 sourceUrl = url,
-                pages = pages.toMutableList(),
-                author = author
+                pages = mutableStateListOf<String>().also { it.addAll(pages) },
+                author = author,
+                cover = cover
             )
             comics.add(0, c)
             tick.value++
@@ -272,8 +302,11 @@ class Library(private val ctx: Context) {
         }
         var added = 0
         for (p in pages) if (!exist.pages.contains(p)) { exist.pages.add(p); added++ }
-        if (exist.title.length < title.length && title.contains("Page")) exist.title = Titles.normalize(title)
+        // 分页标题（"xxx - Page 2" / "xxx 第2页"）合并时把页码尾巴剥掉，中英文都要管
+        val stripped = Titles.normalize(exist.title)
+        if (stripped.isNotBlank() && stripped != exist.title) exist.title = stripped
         if (exist.author.isBlank() && author.isNotBlank()) exist.author = author
+        if (exist.cover.isBlank() && cover.isNotBlank()) exist.cover = cover
         exist.updatedAt = System.currentTimeMillis()
         tick.value++
         return Triple(exist, added, false)
@@ -282,6 +315,7 @@ class Library(private val ctx: Context) {
     fun removeComic(id: String) {
         comics.removeAll { it.id == id }
         File(comicDir, id).deleteRecursively()
+        runCatching { File(File(ctx.filesDir, "covers"), "$id.jpg").delete() }
         tick.value++
     }
 
@@ -329,7 +363,8 @@ class Library(private val ctx: Context) {
     fun cachedPageCount(comicId: String): Int {
         val d = File(comicDir, comicId)
         if (!d.isDirectory) return 0
-        return d.listFiles()?.count { it.length() > 0 } ?: 0
+        // 与 pageModel 的判定保持一致：>1KB 才算一张有效页
+        return d.listFiles()?.count { it.length() > 1024 } ?: 0
     }
 
     fun clearCache(comicId: String) {

@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -334,7 +335,12 @@ fun ImportDialogs(
                 Column {
                     Text("正在解析", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
                     if (state.total > 1) {
-                        Text("共 ${state.total} 个链接", fontSize = 11.sp, color = Glass.TextDim)
+                        Text(
+                            if (state.done > 0) "进度 ${state.done} / ${state.total}"
+                            else "共 ${state.total} 个页面",
+                            fontSize = 11.sp,
+                            color = Glass.TextDim
+                        )
                     }
                 }
             }
@@ -393,14 +399,21 @@ fun ImportDialogs(
                     color = Glass.Accent
                 )
                 Spacer(Modifier.height(12.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(state.items.flatMap { it.images }.take(12)) { u ->
-                        AsyncImage(
-                            model = ImageRequest.Builder(ctx).data(u).crossfade(true).build(),
-                            contentDescription = null,
-                            modifier = Modifier.size(54.dp).clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
+                // EH 的 pages 是图片页地址，不能直接当缩略图；有封面就用封面
+                val previews = state.items.flatMap { p ->
+                    if (p.cover.isNotBlank()) listOf(p.cover)
+                    else p.images.filter { !isPendingPage(it) }
+                }.distinct().take(12)
+                if (previews.isNotEmpty()) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(previews) { u ->
+                            AsyncImage(
+                                model = ImageRequest.Builder(ctx).data(u).crossfade(true).build(),
+                                contentDescription = null,
+                                modifier = Modifier.size(54.dp).clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
                 }
                 if (state.items.size > 1) {
@@ -477,7 +490,7 @@ fun ClipDialog(links: List<String>, onImport: (List<String>) -> Unit, onDismiss:
         Text("检测到剪贴板链接", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
         Spacer(Modifier.height(6.dp))
         Text(
-            if (links.size == 1) "1 个 telegra.ph 链接" else "${links.size} 个 telegra.ph 链接",
+            if (links.size == 1) "1 个可导入链接" else "${links.size} 个可导入链接",
             fontSize = 11.5.sp,
             color = Glass.Accent
         )
@@ -541,7 +554,7 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
         ) {
             if (text.isEmpty()) {
                 Text(
-                    "粘贴链接：telegra.ph 图文页 / t.me 消息或频道 / 图片直链，\n一行一个；整段分享文字也可以",
+                    "粘贴链接：telegra.ph 图文页 / t.me 消息或频道 / e-hentai 画廊或搜索页 / 图片直链，\n一行一个；整段分享文字也可以",
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
                     color = Glass.TextDim.copy(alpha = 0.7f)
@@ -557,7 +570,7 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            if (urls.isEmpty()) "支持 telegra.ph · t.me 消息链接 · 图片直链" else "已识别 ${urls.size} 个链接",
+            if (urls.isEmpty()) "支持 telegra.ph · t.me · e-hentai/exhentai · 图片直链" else "已识别 ${urls.size} 个链接",
             fontSize = 11.sp,
             color = if (urls.isEmpty()) Glass.TextDim else Glass.Good
         )
@@ -573,6 +586,147 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
                     enabled = urls.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth().height(42.dp),
                     onClick = { onImport(urls) }
+                )
+            }
+        }
+    }
+}
+
+// ══════════════ 软件更新 ══════════════
+
+@Composable
+fun UpdateDialog(
+    ui: UpdateUi,
+    onAccept: () -> Unit,
+    onInstall: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val info = ui.info ?: return
+    GlassDialog(onDismiss) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("发现新版本", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Glass.Accent.copy(alpha = 0.14f))
+                    .padding(horizontal = 9.dp, vertical = 3.dp)
+            ) {
+                Text(info.tag, fontSize = 10.5.sp, color = Glass.Accent)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("当前 v${BuildConfig.VERSION_NAME}", fontSize = 11.5.sp, color = Glass.TextDim)
+        if (info.notes.isNotBlank()) {
+            Spacer(Modifier.height(10.dp))
+            Column(Modifier.heightIn(max = 150.dp).verticalScroll(rememberScrollState())) {
+                Text(info.notes, fontSize = 11.sp, lineHeight = 17.sp, color = Glass.TextDim)
+            }
+        }
+        val p = ui.progress
+        if (p != null) {
+            Spacer(Modifier.height(14.dp))
+            LinearProgressIndicator(
+                progress = { p.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                color = Glass.Accent,
+                trackColor = Glass.Track
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (ui.ready) "已下载，可以安装" else "正在下载 ${(p * 100).toInt()}%",
+                fontSize = 11.sp,
+                color = Glass.TextDim
+            )
+        }
+        if (ui.error.isNotBlank()) {
+            Spacer(Modifier.height(10.dp))
+            Text(ui.error, fontSize = 11.sp, lineHeight = 16.sp, color = Glass.Bad)
+        }
+        Spacer(Modifier.height(18.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.weight(1f)) {
+                GlassPill("稍后", modifier = Modifier.fillMaxWidth().height(42.dp), onClick = onDismiss)
+            }
+            if (ui.ready) {
+                Box(Modifier.weight(1.2f)) {
+                    GlassPill(
+                        "安装更新",
+                        filled = true,
+                        modifier = Modifier.fillMaxWidth().height(42.dp),
+                        onClick = onInstall
+                    )
+                }
+            } else if (p == null) {
+                Box(Modifier.weight(1.2f)) {
+                    GlassPill(
+                        "立即更新",
+                        filled = true,
+                        modifier = Modifier.fillMaxWidth().height(42.dp),
+                        onClick = onAccept
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ══════════════ E-Hentai Cookie ══════════════
+
+@Composable
+fun EhCookieDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    GlassDialog(onDismiss) {
+        Text(
+            "E-Hentai / ExHentai Cookie",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Glass.Text
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "e-hentai.org 匿名能看；exhentai.org 必须带登录 Cookie。\n" +
+                "浏览器登录后 F12 → Application → Cookies，把三个值拼成\n" +
+                "ipb_member_id=…; ipb_pass_hash=…; ignorant=1 贴进来。",
+            fontSize = 11.sp,
+            lineHeight = 17.sp,
+            color = Glass.TextDim
+        )
+        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 92.dp)
+                .clip(Glass.R14)
+                .background(Glass.palette.inputField)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            if (text.isEmpty()) {
+                Text(
+                    "ipb_member_id=…; ipb_pass_hash=…; ignorant=1",
+                    fontSize = 12.sp,
+                    color = Glass.TextDim.copy(alpha = 0.7f)
+                )
+            }
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it },
+                textStyle = TextStyle(color = Glass.Text, fontSize = 12.sp, lineHeight = 17.sp),
+                cursorBrush = SolidColor(Glass.Accent),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 70.dp)
+            )
+        }
+        Spacer(Modifier.height(18.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.weight(1f)) {
+                GlassPill("取消", modifier = Modifier.fillMaxWidth().height(42.dp), onClick = onDismiss)
+            }
+            Box(Modifier.weight(1f)) {
+                GlassPill(
+                    "保存",
+                    filled = true,
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    onClick = { onConfirm(text.trim()) }
                 )
             }
         }

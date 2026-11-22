@@ -97,7 +97,7 @@ fun DetailScreen(
                         ) {
                             AsyncImage(
                                 model = ImageRequest.Builder(ctx)
-                                    .data(pageModel(ctx, comic.id, 0, comic.pages.firstOrNull() ?: ""))
+                                    .data(coverModel(ctx, comic))
                                     .crossfade(true)
                                     .build(),
                                 contentDescription = comic.title,
