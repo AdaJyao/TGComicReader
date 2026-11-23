@@ -242,6 +242,8 @@ fun ShelfScreen(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         gridItems(shown, key = { it.id }) { c ->
+                            // 动画：新增/删除册子时有淡入淡出，不会硬闪
+                            Box(Modifier.animateItem()) {
                             ComicTile(
                                 comic = c,
                                 cached = lib.cachedPageCount(c.id),
@@ -253,6 +255,7 @@ fun ShelfScreen(
                                 onLongClick = { toggleSelect(c.id) },
                                 onMenu = { menuFor = c }
                             )
+                            }
                         }
                     }
                 } else {
@@ -1092,6 +1095,17 @@ private fun SettingsContent(
     var showEhCookie by remember { mutableStateOf(false) }
     @Suppress("UNUSED_VARIABLE") val tickVersion = lib.tick.value
     val ctx = LocalContext.current
+    // 登录页回来：Cookie 已写进 Prefs，这里只需要刷新显示
+    val loginLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val had = ehCookieSet
+        ehCookieSet = prefs.ehCookie.isNotBlank()
+        if (!had && ehCookieSet) {
+            EhHub.clearAll()
+            android.widget.Toast.makeText(ctx, "ExHentai Cookie 已保存", android.widget.Toast.LENGTH_SHORT).show()
+        } else if (res.resultCode != android.app.Activity.RESULT_OK && !ehCookieSet) {
+            android.widget.Toast.makeText(ctx, "还没登录成功", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
     val cachedTotal = lib.comics.sumOf { lib.cachedPageCount(it.id) }
     val totalPages = lib.comics.sumOf { it.pages.size }
 
@@ -1202,9 +1216,17 @@ private fun SettingsContent(
         item { SectionHeader("来源") }
         item {
             SettingRow(
+                "登录 ExHentai（自动保存 Cookie）",
+                value = if (ehCookieSet) "已登录" else "未登录",
+                subtitle = "在应用内登录 E-Hentai 账号，登录成功自动写入 Cookie，不用自己抄",
+                onClick = { loginLauncher.launch(Intent(ctx, ExhLoginActivity::class.java)) }
+            )
+        }
+        item {
+            SettingRow(
                 "E-Hentai / ExHentai Cookie",
                 value = if (ehCookieSet) "已设置" else "未设置",
-                subtitle = "exhentai.org 必须登录；e-hentai.org 可匿名浏览",
+                subtitle = "exhentai.org 必须登录；e-hentai.org 可匿名浏览。已登录可直接粘贴",
                 onClick = { showEhCookie = true }
             )
         }
@@ -1223,7 +1245,7 @@ private fun SettingsContent(
         item {
             SettingRow(
                 "支持导入的链接",
-                subtitle = "telegra.ph 图文页 · t.me 消息/频道 · e-hentai/exhentai 画廊与搜索页 · 图片直链"
+                subtitle = "telegra.ph 图文页 · t.me 消息/频道 · e-hentai/exhentai 画廊与搜索页 · 紳士漫畫 wnacg 相册与清单页 · 图片直链"
             )
         }
 

@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -108,8 +110,8 @@ fun coverModel(ctx: Context, comic: Comic): Any {
     return pageModel(ctx, comic.id, 0, comic.pages.firstOrNull() ?: "")
 }
 
-/** 这一页还是 EH 图片页，需要先换直链才能显示 */
-fun isPendingPage(url: String): Boolean = EhApi.needsResolve(url)
+/** 这一页还是「页面地址」，需要先换直链才能显示（EH 看图页 / wnacg 看图页） */
+fun isPendingPage(url: String): Boolean = PageResolver.needsResolve(url)
 
 fun statusLabel(s: String): String = when (s) {
     "ok" -> "已入书架"
@@ -171,7 +173,9 @@ fun AppRoot(
     val ctx = LocalContext.current
 
     Box(Modifier.fillMaxSize().background(Glass.Bg)) {
-        when (screen) {
+        // 页面切换淡入淡出：书架 ↔ 详情 ↔ 阅读器（比瞬切舒服，也不吃性能）
+        Crossfade(targetState = screen, animationSpec = tween(210), label = "screen") { s ->
+        when (s) {
             Screen.Shelf -> ShelfScreen(
                 lib = lib,
                 prefs = prefs,
@@ -200,7 +204,7 @@ fun AppRoot(
 
             is Screen.Detail -> {
                 BackHandler(enabled = true) { onNavigate(Screen.Shelf) }
-                val c = lib.comics.firstOrNull { it.id == screen.id }
+                val c = lib.comics.firstOrNull { it.id == s.id }
                 if (c != null) {
                     DetailScreen(
                         comic = c,
@@ -224,13 +228,13 @@ fun AppRoot(
             }
 
             is Screen.Reader -> {
-                val c = lib.comics.firstOrNull { it.id == screen.id }
+                val c = lib.comics.firstOrNull { it.id == s.id }
                 if (c != null) {
                     ReaderScreen(
                         comic = c,
                         prefs = prefs,
                         cacheState = cacheState?.takeIf { it.comicId == c.id },
-                        initialIndex = screen.startIndex,
+                        initialIndex = s.startIndex,
                         onBack = { onNavigate(Screen.Shelf) },
                         onProgress = { onProgress(c, it) },
                         onCache = { onCache(c) },
@@ -244,6 +248,7 @@ fun AppRoot(
                     onNavigate(Screen.Shelf)
                 }
             }
+        }
         }
 
         ImportDialogs(importState, onConfirmImport, onCloseImport, onRetryLink)

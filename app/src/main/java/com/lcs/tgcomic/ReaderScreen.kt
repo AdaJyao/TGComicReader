@@ -490,7 +490,7 @@ private fun rememberPageLoad(
             return@produceState
         }
         value = PageLoad()
-        val res = runCatching { EhHub.direct(url, cookie) }
+        val res = runCatching { PageResolver.direct(url, cookie) }
         val direct = res.getOrNull()
         value = if (direct != null) PageLoad(direct)
         else PageLoad(failed = true, message = res.exceptionOrNull()?.message.orEmpty())

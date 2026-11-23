@@ -1,6 +1,14 @@
 package com.lcs.tgcomic
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -71,20 +79,30 @@ fun GlassDialog(
             ) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            Modifier
-                .padding(horizontal = 24.dp)
-                .fillMaxWidth()
-                .clip(Glass.R24)
-                .background(Glass.palette.panelTop)
-                .border(1.dp, Glass.palette.outline, Glass.R24)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { }
-                .padding(20.dp),
-            content = content
-        )
+        // 弹窗入场：淡入 + 轻微放大上浮（比直接蹦出来自然）
+        val vis = remember { MutableTransitionState(false).apply { targetState = true } }
+        AnimatedVisibility(
+            visibleState = vis,
+            enter = fadeIn(tween(140)) +
+                scaleIn(initialScale = 0.94f, animationSpec = tween(170)) +
+                slideInVertically(tween(170)) { it / 40 },
+            exit = fadeOut(tween(110))
+        ) {
+            Column(
+                Modifier
+                    .padding(horizontal = 24.dp)
+                    .fillMaxWidth()
+                    .clip(Glass.R24)
+                    .background(Glass.palette.panelTop)
+                    .border(1.dp, Glass.palette.outline, Glass.R24)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { }
+                    .padding(20.dp),
+                content = content
+            )
+        }
     }
 }
 
@@ -110,9 +128,16 @@ fun GlassSheet(
                 indication = null
             ) { onDismiss() }
     ) {
+        // 底部菜单：从底部滑上来（带一点淡入）
+        val vis = remember { MutableTransitionState(false).apply { targetState = true } }
+        AnimatedVisibility(
+            visibleState = vis,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(tween(240)) { it } + fadeIn(tween(150)),
+            exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(120))
+        ) {
         Column(
             Modifier
-                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .heightIn(max = maxHeight)
                 .clip(topShape)
@@ -168,6 +193,7 @@ fun GlassSheet(
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = 14.dp)
             ) { content(onDismiss) }
+        }
         }
     }
 }
@@ -570,7 +596,7 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            if (urls.isEmpty()) "支持 telegra.ph · t.me · e-hentai/exhentai · 图片直链" else "已识别 ${urls.size} 个链接",
+            if (urls.isEmpty()) "支持 telegra.ph · t.me · e-hentai/exhentai · 紳士漫畫 wnacg · 图片直链" else "已识别 ${urls.size} 个链接",
             fontSize = 11.sp,
             color = if (urls.isEmpty()) Glass.TextDim else Glass.Good
         )

@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.18 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.19 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -30,6 +30,7 @@
 | [v2.16](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.16) | 图标换成金黑双层嵌套标记 |
 | [v2.17](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.17) | 支持 E-Hentai / ExHentai（含搜索页批量导入）、内置自动更新、修 7 个历史问题 |
 | [v2.18](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.18) | 设置页重做（七段式 + 说明文字 + 备份恢复）、电报链接兜底 |
+| [v2.19](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.19) | 支持紳士漫畫 wnacg、站内登录 ExHentai 自动存 Cookie、图片缓存与界面动画 |
 
 ## 构建
 
@@ -708,3 +709,49 @@ PNG 位图同步重生成（5 个密度 + 圆形版）。
 
 - 缓存时解析 EH 直链抛异常会把整个缓存任务打断（甚至会崩 App），现在逐页兜住，失败的那页跳过继续。
 - 下载失败（比如被站点封禁时返回的 243 字节小页面）不再留在缓存目录里被算成「已缓存」。
+
+---
+
+## 2.19 支持紳士漫畫（wnacg）+ 站内登录 ExHentai + 图片/动画优化
+
+### 一、新增来源：紳士漫畫 wnacg
+
+| 链接形态 | 处理 |
+|---|---|
+| `wnacg.com/photos-index-aid-324632.html` | 相册：按分页翻完收齐**全部**看图页（示例相册 246 页），封面取缩略图 |
+| `wnacg.com/photos-view-id-27258533.html` | 单页看图，可单独导入 |
+| `wnacg.com/albums.html`、`albums-index-tag-*.html`、分类页 | 清单页：批量展开成多册（与 E-Hentai 搜索页同一套逻辑） |
+| `photos-slide-aid-*.html` | 当作相册处理 |
+
+实现要点：
+
+- **必须用桌面 UA**：移动 UA 拿到的版式既没有 `photos-index-page-N` 分页，也没有 `photos-view-id` 链接，抓不到东西。
+- 图片直链形如 `//img5.qy0.ru/data/3246/32/001.jpg?verify=…`，`verify` 有时效 —— 和 E-Hentai 一样，书架里**只存看图页地址**，读图/缓存时才换直链（5 分钟内存缓存）。
+- 翻页从**第 2 页**开始：`photos-index-page-1-aid-N.html` 和相册首页内容完全一样，从 1 开始会被「没有新图」判据误停（实测 246 页的相册只抓到 12 页）。
+- 封面/缩略图是无令牌的静态地址（`t4.qy0.ru/data/t/…`），可以直接长期用。
+
+### 二、ExHentai 站内登录（不用再手抄 Cookie）
+
+设置 → **来源** → **登录 ExHentai（自动保存 Cookie）**：
+
+1. 应用内 WebView 打开 exhentai.org（没登录会看到 sad panda）
+2. 点右上「去登录」→ E-Hentai 论坛登录页，输入账号密码
+3. 登录成功后自动读取 `ipb_member_id` / `ipb_pass_hash` / `ignorant` 写进设置，提示「Cookie 已保存」并自动返回
+4. 也可以随时点「保存」手动存当前 Cookie；顶部还会提示打不开的原因（网络到不了 / 要开代理）
+
+原来的「粘贴 Cookie」入口保留，两者都写同一个字段。
+
+### 三、图片与网络加载
+
+- 新增全局图片加载器 `TgApp`：
+  - **按域名补 Referer**（`qy0.ru`→wnacg、`hath.network`/`ehgt.org`→e-hentai、`telesco.pe`/`t.me`），wnacg 图片不带 Referer 会 403
+  - **256MB 磁盘缓存 + 25% 内存缓存**，翻回去不用重下
+  - `respectCacheHeaders(false)`：图床用 `?verify=`/`?keystamp=` 令牌，别让缓存被强制失效
+  - 淡入 180ms，连续滚动不闪
+- wnacg 站点请求限速 500ms，解析相册时按「已收 N / 总 M 页」显示进度
+
+### 四、动画
+
+- 书架 ↔ 详情 ↔ 阅读器：**淡入淡出**切换（210ms），不再瞬切
+- 弹窗：淡入 + 从 94% 轻微放大上浮；底部菜单：从底部滑入
+- 书架网格：增删册子有 `animateItem()` 过渡

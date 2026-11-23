@@ -9,6 +9,7 @@
         android:maxSdkVersion="28" />
 
     <application
+        android:name=".TgApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher_v5"
         android:roundIcon="@mipmap/ic_launcher_v5_round"
@@ -54,6 +55,13 @@
                 <data android:scheme="https" android:host="exhentai.org" />
             </intent-filter>
         </activity>
+
+        <!-- ExHentai 站内登录：WebView 登录后自动抓 Cookie -->
+        <activity
+            android:name=".ExhLoginActivity"
+            android:exported="false"
+            android:label="ExHentai 登录"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
 
         <!-- 更新包给系统安装器读 -->
         <provider

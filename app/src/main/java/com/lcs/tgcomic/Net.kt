@@ -123,10 +123,11 @@ object Net {
             }
         }
 
-    /** 图床按来源挑 Referer：EH 的 hath.network / ehgt.org 只认站点域名 */
+    /** 图床按来源挑 Referer：EH 的 hath.network / ehgt.org、wnacg 的 qy0.ru 只认自家站点 */
     fun autoReferer(url: String): String = when {
         url.contains("hath.network") || url.contains("ehgt.org") ||
             url.contains("e-hentai.org") || url.contains("exhentai.org") -> "https://e-hentai.org/"
+        url.contains("qy0.ru") || url.contains("wnacg.") -> "https://www.wnacg.com/"
         url.contains("telesco.pe") || url.contains("telegram-cdn") || url.contains("t.me") ->
             "https://t.me/"
         else -> "https://telegra.ph/"

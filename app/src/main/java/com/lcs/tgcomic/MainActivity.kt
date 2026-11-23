@@ -251,6 +251,14 @@ class MainActivity : ComponentActivity() {
         when {
             EhApi.isGalleryPage(url) -> loadEhGallery(url)
             EhApi.isListPage(url) -> throw IllegalStateException("这是 E-Hentai 列表页，需要先展开成多册")
+            WnacgApi.isAlbum(url) -> loadWnacgAlbum(url)
+            WnacgApi.isViewPage(url) -> TelegraphParser.Article(
+                url = url,
+                title = "wnacg 单页",
+                author = "",
+                images = listOf(url)
+            )
+            WnacgApi.isListPage(url) -> throw IllegalStateException("这是 wnacg 清单页，需要先展开成多册")
             TelegraphParser.isTgLink(url) -> loadTelegram(url)
             TelegraphParser.isImageUrl(url) -> TelegraphParser.Article(
                 url = url,
@@ -261,6 +269,14 @@ class MainActivity : ComponentActivity() {
             )
             else -> loadTelegraph(url)
         }
+    }
+
+    /** 紳士漫畫相册：翻页收齐所有看图页地址，直链在读图/缓存时才换（verify 令牌有时效） */
+    private suspend fun loadWnacgAlbum(url: String): TelegraphParser.Article {
+        val a = WnacgApi.loadAlbum(url) { done, total ->
+            importState = ImportState.Loading(url, total.coerceAtLeast(1), done)
+        }
+        return TelegraphParser.Article(a.url, a.title, a.author, a.pageUrls, a.cover)
     }
 
     /** E-Hentai / ExHentai 画廊：取每页的图片页地址，直链在读图/缓存时才换（keystamp 有时效） */
@@ -378,26 +394,29 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             importState = ImportState.Loading(list.first(), list.size, 0)
 
-            // E-Hentai 的搜索 / 标签 / 首页列表页：先展开成一批画廊链接（批量识别）
+            // 列表页（E-Hentai 搜索页 / wnacg 清单页）：先展开成一批相册链接（批量识别）
             val work = mutableListOf<String>()
             for ((i, u) in list.withIndex()) {
-                if (!EhApi.isListPage(u)) {
+                val isEhList = EhApi.isListPage(u)
+                val isWnList = WnacgApi.isListPage(u)
+                if (!isEhList && !isWnList) {
                     work.add(u)
                     continue
                 }
                 importState = ImportState.Loading(u, list.size, i)
-                val refs = try {
-                    EhApi.expandList(u, prefs.ehCookie)
+                val refs: List<String> = try {
+                    if (isWnList) WnacgApi.expandList(u).map { it.url }
+                    else EhApi.expandList(u, prefs.ehCookie).map { it.url }
                 } catch (e: Exception) {
-                    lib.addLink(u, "E-Hentai 列表页", "fail", e.message ?: "列表展开失败")
+                    lib.addLink(u, if (isWnList) "wnacg 清单页" else "E-Hentai 列表页", "fail", e.message ?: "列表展开失败")
                     emptyList()
                 }
                 if (refs.isEmpty()) {
                     if (lib.links.none { it.url == u }) {
-                        lib.addLink(u, "E-Hentai 列表页", "fail", "没解析到画廊")
+                        lib.addLink(u, if (isWnList) "wnacg 清单页" else "E-Hentai 列表页", "fail", "没解析到相册")
                     }
                 } else {
-                    work.addAll(refs.map { it.url })
+                    work.addAll(refs)
                 }
             }
             val targets = work.distinct().take(MAX_BATCH_TARGETS)
@@ -535,11 +554,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** EH 图片页在缓存前先解析成直链；其它来源原样返回（解析失败返回 null → 退回原始 URL） */
+    /** 来源页面（EH / wnacg）在缓存前先解析成直链；其它来源原样返回（解析失败返回 null → 退回原始 URL） */
     private suspend fun resolveIfNeeded(c: Comic, i: Int): String? = withContext(Dispatchers.IO) {
         val url = c.pages.getOrNull(i) ?: return@withContext null
-        // 只换直链，不改写 pages：图片页地址才是长期有效的身份
-        EhHub.direct(url, prefs.ehCookie)
+        // 只换直链，不改写 pages：页面地址才是长期有效的身份
+        PageResolver.direct(url, prefs.ehCookie)
     }
 
     private fun cancelCache() {
