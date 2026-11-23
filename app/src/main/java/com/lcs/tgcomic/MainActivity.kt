@@ -377,9 +377,11 @@ class MainActivity : ComponentActivity() {
         if (imgs.isEmpty()) {
             throw IllegalStateException("这条消息里没有可解析的图片（纯文字或视频消息）")
         }
-        val finalTitle = title.ifBlank {
-            if (channel.posts.size == 1) "${channel.name} 的消息"
-            else "${channel.name} · 最近 ${channel.posts.size} 条"
+        // 整个频道导入时用「频道名 · 最近 N 条」当标题：帖子正文容易是半句话，不适合当书名
+        val finalTitle = if (channel.posts.size > 1) {
+            "${channel.name} · 最近 ${channel.posts.size} 条"
+        } else {
+            title.ifBlank { "${channel.name} 的消息" }
         }
         return TelegraphParser.Article(url, finalTitle, author, imgs.toList())
     }

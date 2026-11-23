@@ -31,6 +31,14 @@ object TgParser {
         """tgme_channel_info_header_title[^>]*>\s*<span[^>]*>([^<]+)</span>""",
         setOf(RegexOption.IGNORE_CASE)
     )
+    /**
+     * 频道/发送者头像：<i class="tgme_widget_message_user_photo ..."><img src="..."></i>
+     * 每条消息都带一张头像图，不剔掉会被当成漫画的「第一页」（「有些 tg 不对」的根因）
+     */
+    private val USER_PHOTO = Regex(
+        """<i class="tgme_widget_message_user_photo[^"]*"[^>]*>.*?</i>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
     private val ANY_IMG = Regex("""<img[^>]+src="(https?://[^"]+)"""", setOf(RegexOption.IGNORE_CASE))
     private val HREF = Regex("""href="(https?://[^"]+)"""", setOf(RegexOption.IGNORE_CASE))
     private val TAG = Regex("<[^>]+>")
@@ -105,6 +113,14 @@ object TgParser {
         val msgId = link.msgId
 
         if (msgId != null) {
+            // 1) 单条嵌入页 https://t.me/<ch>/<id>?embed=1：只含这一条，老消息/相册都稳
+            val embed = runCatching { fetch("https://t.me/$channel/$msgId?embed=1") }.getOrNull()
+            if (embed != null) {
+                val hit = parsePosts(embed, channel).filter { it.key == "$channel/$msgId" }
+                if (hit.isNotEmpty()) return Channel(channelTitle(embed, channel), hit)
+            }
+
+            // 2) 网页预览窗口：?before=id+1
             val html = fetch("https://t.me/s/$channel?before=${msgId + 1}")
             val hit = parsePosts(html, channel).filter { it.key == "$channel/$msgId" }
             if (hit.isNotEmpty()) return Channel(channelTitle(html, channel), hit)
@@ -131,6 +147,8 @@ object TgParser {
             val start = m.range.first
             val end = marks.getOrNull(i + 1)?.range?.first ?: html.length
             val chunk = html.substring(start, end)
+            // 先剔头像再取图：头像和相册图片都是 <img>，只看 src 区分不了
+            val body = USER_PHOTO.replace(chunk, "")
 
             val textHtml = TEXT_BLOCK.find(chunk)?.groupValues?.get(1) ?: ""
             val text = decode(TAG.replace(textHtml, " "))
@@ -138,8 +156,9 @@ object TgParser {
                 .trim()
 
             val images = LinkedHashSet<String>()
-            PHOTO_BG.findAll(chunk).forEach { images.add(it.groupValues[1]) }
-            ANY_IMG.findAll(chunk).forEach {
+            // 注意 groupValues[2]：第 1 组是引号，第 2 组才是 URL（取 1 会抓到一个引号字符）
+            PHOTO_BG.findAll(body).forEach { images.add(it.groupValues[2]) }
+            ANY_IMG.findAll(body).forEach {
                 val u = it.groupValues[1]
                 if (!u.contains("emoji") && !u.contains("telegram.org")) images.add(u)
             }

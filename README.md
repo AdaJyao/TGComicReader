@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.20 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.21 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -32,6 +32,7 @@
 | [v2.18](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.18) | 设置页重做（七段式 + 说明文字 + 备份恢复）、电报链接兜底 |
 | [v2.19](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.19) | 支持紳士漫畫 wnacg、站内登录 ExHentai 自动存 Cookie、图片缓存与界面动画 |
 | [v2.20](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.20) | 修 ExHentai 登录卡 Cloudflare 验证、修「能导入但阅读器一片空白」 |
+| [v2.21](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.21) | 修 Telegram 解析：抓到的是频道头像 + 一个引号字符 |
 
 ## 构建
 
@@ -795,3 +796,35 @@ PNG 位图同步重生成（5 个密度 + 圆形版）。
 3. **失败自动兜底到本地**：某页远程加载失败时，自动用 `Net.download` 把这页存进缓存目录再显示
    （和「缓存整册」同一条通道，成功率高得多），显示「网络慢，正在把这一页存到本地…」；
    两条路都失败才提示点击重试。顺带把这一页变成已缓存。
+
+---
+
+## 2.21 修 Telegram：之前抓到的「图」其实是头像和一个引号
+
+两个都是低级但致命的错误，所以「有些 tg 链接」导进去是空的 / 只有一两张怪图。
+
+### 一、`url(...)` 取错了分组
+
+图片背景图的正则是 `url\((['"]?)(https?://[^)'"]+)\1\)` —— 第 1 组是引号，第 2 组才是 URL。
+代码写的是 `groupValues[1]`，于是每条消息的「图片列表」里放的是一个引号字符：
+
+- 单条消息显示「共 2 张图」= 1 个引号 + 1 个频道头像，**真正的照片一张都没进去**
+- 整频道显示「共 1 张图」= 20 条消息的引号去重成 1 条
+
+改成 `groupValues[2]`。
+
+### 二、频道/发送者头像被当成内容图
+
+每条消息都带 `<i class="tgme_widget_message_user_photo"><img src="…"></i>`，
+它和相册图片一样是 `<img>`，只靠 src 区分不了 → 解析前先把整个头像块剔掉。
+
+### 三、单条消息改用嵌入页
+
+`https://t.me/<频道>/<id>?embed=1` 只包含这一条消息，比「网页预览 + ?before=」精确，
+老消息、相册（一条多个图）都能拿到。顺序变成：嵌入页 → `?before=` → 频道页。
+
+另外：整频道导入的标题改成「频道名 · 最近 N 条」（以前拿第一条正文当书名，常是半句话）；
+纯文字 / 视频消息会明确提示没有图片。
+
+实测：`t.me/telegram/452` → 共 1 张图（以前 2 张）；`t.me/telegram` → 共 20 张图，
+进阅读器 20 页图片全部正常显示。
