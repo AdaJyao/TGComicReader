@@ -145,6 +145,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("autoUpdate", true)
         set(v) = sp.edit().putBoolean("autoUpdate", v).apply()
 
+    /** E-Hentai 稳妥模式：请求间隔翻倍，宁可慢也别被限速封 IP */
+    var ehSlow: Boolean
+        get() = sp.getBoolean("ehSlow", false)
+        set(v) = sp.edit().putBoolean("ehSlow", v).apply()
+
     /** 上次检查更新的时间戳 */
     var lastUpdateCheck: Long
         get() = sp.getLong("lastUpdateCheck", 0L)
@@ -341,6 +346,54 @@ class Library(private val ctx: Context) {
 
     fun removeLink(url: String) {
         links.removeAll { it.url == url }
+    }
+
+    /**
+     * 从导出的书架 JSON 恢复：按来源链接去重，已有的册子会把缺的页补上。
+     * @return (新增册数, 被补页的册数)；null = 这个文件根本不是有效的书架备份
+     */
+    fun importJson(text: String): Pair<Int, Int>? {
+        // 有些编辑器存 JSON 会带 BOM，直接 JSONObject() 会解析失败
+        val clean = text.trimStart('\uFEFF', ' ', '\n', '\r', '\t')
+        val root = runCatching { JSONObject(clean) }.getOrNull() ?: return null
+        val arr = root.optJSONArray("comics") ?: root.optJSONArray("data") ?: return null
+        var added = 0
+        var merged = 0
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val url = o.optString("url")
+            if (url.isBlank()) continue
+            val pages = mutableListOf<String>()
+            val pa = o.optJSONArray("pages") ?: JSONArray()
+            for (j in 0 until pa.length()) pages.add(pa.getString(j))
+            val title = o.optString("title", "未命名")
+            val cover = o.optString("cover", "")
+            val exist = comics.firstOrNull { it.sourceUrl == url }
+            if (exist == null) {
+                comics.add(
+                    Comic(
+                        id = o.optString("id").ifBlank { comicIdOf(url) },
+                        title = title,
+                        sourceUrl = url,
+                        pages = mutableStateListOf<String>().also { it.addAll(pages) },
+                        lastIndex = o.optInt("lastIndex", 0),
+                        addedAt = o.optLong("addedAt", System.currentTimeMillis()),
+                        author = o.optString("author", ""),
+                        updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
+                        favorite = o.optBoolean("favorite", false),
+                        cover = cover
+                    )
+                )
+                added++
+            } else {
+                var n = 0
+                for (p in pages) if (!exist.pages.contains(p)) { exist.pages.add(p); n++ }
+                if (n > 0) merged++
+                if (exist.cover.isBlank() && cover.isNotBlank()) exist.cover = cover
+            }
+        }
+        tick.value++
+        return added to merged
     }
 
     fun clearLinks() = links.clear()

@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
         lib = Library(applicationContext)
         lib.load()
         prefs = Prefs(applicationContext)
+        EhApi.setSlowMode(prefs.ehSlow)
 
         theme = prefs.theme
         Glass.apply(paletteOf(theme, systemDark()))
@@ -324,9 +325,20 @@ class MainActivity : ComponentActivity() {
 
     /** t.me 消息 / 频道：取消息里的图片，并递归跟进消息里出现的 telegra.ph 链接 */
     private suspend fun loadTelegram(url: String): TelegraphParser.Article {
+        if (TgParser.isPrivate(url)) {
+            throw IllegalStateException(
+                "t.me/c/… 是私有频道内部链接，未登录抓不到。请在 Telegram 里对那条消息「复制链接」再试"
+            )
+        }
+        val link = TgParser.parseLink(url)
+            ?: throw IllegalStateException("认不出这个 Telegram 链接形态：$url")
         val channel = TgParser.load(url)
             ?: throw IllegalStateException(
-                "抓不到这条消息：可能是私有频道（t.me/c/…）、频道没开网页预览，或消息已删除"
+                if (link.wholeChannel)
+                    "抓不到 @${link.channel}：可能是私有频道、没开「网页预览」，或频道已注销"
+                else
+                    "抓不到 @${link.channel} 的第 ${link.msgId} 条：可能是频道关了网页预览、消息已删除，" +
+                        "或这条消息本身没图片（视频 / 纯文字 / 评论区消息）"
             )
         val imgs = LinkedHashSet<String>()
         var title = ""

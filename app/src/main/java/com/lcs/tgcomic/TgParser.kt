@@ -44,41 +44,78 @@ object TgParser {
 
     data class Channel(val name: String, val posts: List<Post>)
 
-    /** 解析链接 → (频道, 消息 id?, 是否频道页)；t.me/c/... 私有链接返回 null */
-    fun parseLink(url: String): Triple<String, Long?, Boolean>? {
+    /** 解析出来的链接形态 */
+    data class Link(
+        val channel: String,
+        val msgId: Long? = null,
+        /** true = 整个频道页（最近若干条），false = 单条消息 */
+        val wholeChannel: Boolean = false,
+        /** ?comment=<id> 评论区消息（网页预览拿不到正文） */
+        val commentId: Long? = null
+    )
+
+    /** t.me/c/... 私有链接：未登录抓不到 */
+    fun isPrivate(url: String): Boolean =
+        Regex("""^https?://(?:t\.me|telegram\.me)/c/""", RegexOption.IGNORE_CASE).containsMatchIn(url.trim())
+
+    /**
+     * 支持的形态：
+     *   t.me/<ch>/<id>           单条消息
+     *   t.me/s/<ch>/<id>         单条消息（网页预览形式）
+     *   t.me/s/<ch>  t.me/<ch>   频道页
+     *   以上都可带 ?single、?comment=<id> 等参数（参数忽略；comment 只做提示）
+     */
+    fun parseLink(url: String): Link? {
         val u = url.trim()
-        if (Regex("""^https?://(?:t\.me|telegram\.me)/c/""", RegexOption.IGNORE_CASE).containsMatchIn(u)) {
-            return null
-        }
-        Regex("""^https?://(?:t\.me|telegram\.me)/s/([A-Za-z0-9_]+)""", RegexOption.IGNORE_CASE).find(u)?.let {
-            return Triple(it.groupValues[1], null, true)
-        }
-        Regex("""^https?://(?:t\.me|telegram\.me)/([A-Za-z0-9_]+)/(\d+)""", RegexOption.IGNORE_CASE).find(u)?.let {
-            return Triple(it.groupValues[1], it.groupValues[2].toLongOrNull(), false)
-        }
-        Regex("""^https?://(?:t\.me|telegram\.me)/([A-Za-z0-9_]+)/?$""", RegexOption.IGNORE_CASE).find(u)?.let {
-            return Triple(it.groupValues[1], null, true)
-        }
+        if (isPrivate(u)) return null
+        val comment = Regex("""[?&]comment=(\d+)""").find(u)?.groupValues?.get(1)?.toLongOrNull()
+
+        // 单条消息：t.me/s/<ch>/<id>
+        Regex("""^https?://(?:t\.me|telegram\.me)/s/([A-Za-z0-9_]+)/(\d+)""", RegexOption.IGNORE_CASE)
+            .find(u)?.let { m ->
+                return Link(m.groupValues[1], m.groupValues[2].toLongOrNull(), wholeChannel = false, commentId = comment)
+            }
+        // 单条消息：t.me/<ch>/<id>
+        Regex("""^https?://(?:t\.me|telegram\.me)/([A-Za-z0-9_]+)/(\d+)""", RegexOption.IGNORE_CASE)
+            .find(u)?.let { m ->
+                return Link(m.groupValues[1], m.groupValues[2].toLongOrNull(), wholeChannel = false, commentId = comment)
+            }
+        // 频道页：t.me/s/<ch>、t.me/<ch>
+        Regex("""^https?://(?:t\.me|telegram\.me)/s/([A-Za-z0-9_]+)/?(?:[?#].*)?$""", RegexOption.IGNORE_CASE)
+            .find(u)?.let { m -> return Link(m.groupValues[1], null, wholeChannel = true, commentId = comment) }
+        Regex("""^https?://(?:t\.me|telegram\.me)/([A-Za-z0-9_]+)/?(?:[?#].*)?$""", RegexOption.IGNORE_CASE)
+            .find(u)?.let { m -> return Link(m.groupValues[1], null, wholeChannel = true, commentId = comment) }
         return null
+    }
+
+    /** 抓 t.me 页面，网络失败给能看懂的提示（国内直连 Telegram 基本不通） */
+    private suspend fun fetch(url: String): String = try {
+        Net.getText(url)
+    } catch (e: Exception) {
+        throw IllegalStateException(
+            "打不开 t.me（${e.message}）：手机要能访问 Telegram，国内一般需要开代理",
+            e
+        )
     }
 
     /** 拉取并解析；目标消息不在首页时用 ?before=id+1 精确定位 */
     suspend fun load(url: String): Channel? {
-        val parsed = parseLink(url) ?: return null
-        val (channel, msgId, _) = parsed
+        val link = parseLink(url) ?: return null
+        val channel = link.channel
+        val msgId = link.msgId
 
         if (msgId != null) {
-            val html = Net.getText("https://t.me/s/$channel?before=${msgId + 1}")
+            val html = fetch("https://t.me/s/$channel?before=${msgId + 1}")
             val hit = parsePosts(html, channel).filter { it.key == "$channel/$msgId" }
             if (hit.isNotEmpty()) return Channel(channelTitle(html, channel), hit)
 
-            val html2 = Net.getText("https://t.me/s/$channel")
+            val html2 = fetch("https://t.me/s/$channel")
             val hit2 = parsePosts(html2, channel).filter { it.key == "$channel/$msgId" }
             if (hit2.isNotEmpty()) return Channel(channelTitle(html2, channel), hit2)
             return null
         }
 
-        val html = Net.getText("https://t.me/s/$channel")
+        val html = fetch("https://t.me/s/$channel")
         val posts = parsePosts(html, channel)
         if (posts.isEmpty()) return null
         return Channel(channelTitle(html, channel), posts)

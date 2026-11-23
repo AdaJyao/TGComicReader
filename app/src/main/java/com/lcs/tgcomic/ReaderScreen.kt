@@ -34,6 +34,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +51,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -75,6 +77,13 @@ fun ReaderScreen(
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // 屏幕常亮（设置页可关）
+    val view = LocalView.current
+    DisposableEffect(prefs.keepScreenOn) {
+        view.keepScreenOn = prefs.keepScreenOn
+        onDispose { view.keepScreenOn = false }
+    }
 
     var mode by remember { mutableStateOf(prefs.readerMode) }
     var bg by remember { mutableStateOf(prefs.readerBg) }

@@ -129,8 +129,17 @@ object EhApi {
         "E-Hentai 临时封禁了这个 IP：请求太频繁，还要等 ${((remainMs / 60_000) + 1)} 分钟"
     )
 
+    /** 稳妥模式：请求间隔翻倍（设置页可开） */
+    @Volatile
+    private var slowMode = false
+
+    fun setSlowMode(on: Boolean) {
+        slowMode = on
+    }
+
     private suspend fun throttle() {
-        val wait = THROTTLE_MS - (System.currentTimeMillis() - lastAt)
+        val gap = if (slowMode) THROTTLE_MS * 2 else THROTTLE_MS
+        val wait = gap - (System.currentTimeMillis() - lastAt)
         if (wait > 0) delay(wait)
         // 加一点抖动，别形成固定节奏
         delay((0..400).random().toLong())

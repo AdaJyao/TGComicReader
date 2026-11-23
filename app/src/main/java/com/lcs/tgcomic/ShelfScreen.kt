@@ -1,5 +1,9 @@
 package com.lcs.tgcomic
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.runtime.rememberCoroutineScope
@@ -104,6 +108,30 @@ fun ShelfScreen(
 
     val selectMode = selected.isNotEmpty()
     val ctx = LocalContext.current
+    var infoDialog by remember { mutableStateOf<String?>(null) }
+
+    // 从备份 JSON 恢复书架（系统文件选择器）
+    val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching {
+            ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+        }.getOrNull()
+        if (text.isNullOrBlank()) {
+            infoDialog = "读取备份文件失败，确认选的是导出的 tgcomic-*.json"
+        } else {
+            val result = lib.importJson(text)
+            infoDialog = if (result == null) {
+                "这不是有效的书架备份：JSON 解析失败（文件可能被改坏或不是 TG漫画 导出的）"
+            } else {
+                val (added, merged) = result
+                when {
+                    added == 0 && merged == 0 -> "这个备份里的册子都已经在书架上了"
+                    merged > 0 -> "已恢复：新增 $added 册，另有 $merged 册补全了缺页"
+                    else -> "已恢复：新增 $added 册"
+                }
+            }
+        }
+    }
     @Suppress("UNUSED_VARIABLE")
     val tick = lib.tick.value
     val all = lib.sortComics(sort, favFirst)
@@ -273,11 +301,36 @@ fun ShelfScreen(
                     prefs = prefs,
                     theme = theme,
                     onTheme = onTheme,
+                    grid = grid,
+                    onGrid = { v ->
+                        grid = v
+                        prefs.grid = v
+                    },
+                    columns = columns,
+                    onColumns = { v ->
+                        columns = v
+                        prefs.columns = v
+                    },
+                    sort = sort,
+                    onSort = { v ->
+                        sort = v
+                        prefs.sort = v
+                    },
+                    favFirst = favFirst,
+                    onFavFirst = { v ->
+                        favFirst = v
+                        prefs.favoritesFirst = v
+                    },
                     onClearAllCache = { lib.comics.forEach(onClearCache) },
                     onClearLinks = { showClearLinks = true },
                     onCheckUpdates = onCheckUpdates,
                     onCheckAppUpdate = onCheckAppUpdate,
-                    onExport = onExport
+                    onExport = onExport,
+                    onImportBackup = {
+                        runCatching {
+                            backupPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                        }.onFailure { infoDialog = "打不开文件选择器：${it.message}" }
+                    }
                 )
             }
         }
@@ -482,6 +535,10 @@ fun ShelfScreen(
             showPaste = false
             onImport(urls)
         }
+    }
+
+    infoDialog?.let { text ->
+        InfoDialog(title = "提示", body = text, onDismiss = { infoDialog = null })
     }
 }
 
@@ -1011,18 +1068,30 @@ private fun SettingsContent(
     prefs: Prefs,
     theme: AppTheme,
     onTheme: (AppTheme) -> Unit,
+    grid: Boolean,
+    onGrid: (Boolean) -> Unit,
+    columns: Int,
+    onColumns: (Int) -> Unit,
+    sort: SortMode,
+    onSort: (SortMode) -> Unit,
+    favFirst: Boolean,
+    onFavFirst: (Boolean) -> Unit,
     onClearAllCache: () -> Unit,
     onClearLinks: () -> Unit,
     onCheckUpdates: () -> Unit,
     onCheckAppUpdate: () -> Unit,
-    onExport: (ExportKind, Set<String>?) -> Unit
+    onExport: (ExportKind, Set<String>?) -> Unit,
+    onImportBackup: () -> Unit
 ) {
     var readerMode by remember { mutableStateOf(prefs.readerMode) }
     var readerBg by remember { mutableStateOf(prefs.readerBg) }
     var autoUpdate by remember { mutableStateOf(prefs.autoUpdate) }
+    var slowEh by remember { mutableStateOf(prefs.ehSlow) }
+    var keepOn by remember { mutableStateOf(prefs.keepScreenOn) }
     var ehCookieSet by remember { mutableStateOf(prefs.ehCookie.isNotBlank()) }
     var showEhCookie by remember { mutableStateOf(false) }
     @Suppress("UNUSED_VARIABLE") val tickVersion = lib.tick.value
+    val ctx = LocalContext.current
     val cachedTotal = lib.comics.sumOf { lib.cachedPageCount(it.id) }
     val totalPages = lib.comics.sumOf { it.pages.size }
 
@@ -1030,12 +1099,11 @@ private fun SettingsContent(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 110.dp)
     ) {
-        item { SectionHeader("主题") }
+        // ── 外观 ──
+        item { SectionHeader("外观") }
         item {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 AppTheme.entries.forEach { t2 ->
@@ -1044,12 +1112,11 @@ private fun SettingsContent(
             }
         }
 
+        // ── 阅读 ──
         item { SectionHeader("阅读") }
         item {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ReaderMode.entries.forEach { m ->
@@ -1061,9 +1128,7 @@ private fun SettingsContent(
             }
             Spacer(Modifier.height(8.dp))
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ReaderBg.entries.forEach { b ->
@@ -1074,41 +1139,149 @@ private fun SettingsContent(
                 }
             }
         }
+        item {
+            SettingRow(
+                "屏幕常亮",
+                value = if (keepOn) "开" else "关",
+                subtitle = "阅读时不自动锁屏",
+                onClick = {
+                    keepOn = !keepOn
+                    prefs.keepScreenOn = keepOn
+                }
+            )
+        }
 
+        // ── 书架 ──
+        item { SectionHeader("书架") }
+        item {
+            SettingRow(
+                "默认视图",
+                value = if (grid) "网格" else "列表",
+                subtitle = "书架首页的排版",
+                onClick = { onGrid(!grid) }
+            )
+        }
+        item {
+            SettingRow(
+                "网格列数",
+                value = if (columns == 2) "2 列" else "3 列",
+                subtitle = "网格模式下每行放几册",
+                onClick = { onColumns(if (columns == 2) 3 else 2) }
+            )
+        }
+        item {
+            SettingRow(
+                "排序方式",
+                value = sort.label,
+                subtitle = "点一下切换：最近阅读 / 最近添加 / 标题 / 页数",
+                onClick = {
+                    onSort(
+                        when (sort) {
+                            SortMode.RECENT -> SortMode.ADDED
+                            SortMode.ADDED -> SortMode.TITLE
+                            SortMode.TITLE -> SortMode.PAGES
+                            SortMode.PAGES -> SortMode.RECENT
+                        }
+                    )
+                }
+            )
+        }
+        item {
+            SettingRow(
+                "收藏优先",
+                value = if (favFirst) "开" else "关",
+                subtitle = "收藏的册子排在最前面",
+                onClick = { onFavFirst(!favFirst) }
+            )
+        }
+        item { SettingRow("册数", "${lib.comics.size} 册") }
+        item { SettingRow("总页数", "$totalPages 页") }
+        item { SettingRow("链接记录", "${lib.links.size} 条") }
+
+        // ── 来源 ──
         item { SectionHeader("来源") }
         item {
             SettingRow(
                 "E-Hentai / ExHentai Cookie",
                 value = if (ehCookieSet) "已设置" else "未设置",
+                subtitle = "exhentai.org 必须登录；e-hentai.org 可匿名浏览",
                 onClick = { showEhCookie = true }
             )
         }
-        item { SettingRow("解析来源", "telegra.ph · t.me · e-hentai/exhentai · 图片直链") }
+        item {
+            SettingRow(
+                "E-Hentai 稳妥模式",
+                value = if (slowEh) "开" else "关",
+                subtitle = "请求间隔翻倍，慢一点但不容易被站点限速/封 IP",
+                onClick = {
+                    slowEh = !slowEh
+                    prefs.ehSlow = slowEh
+                    EhApi.setSlowMode(slowEh)
+                }
+            )
+        }
+        item {
+            SettingRow(
+                "支持导入的链接",
+                subtitle = "telegra.ph 图文页 · t.me 消息/频道 · e-hentai/exhentai 画廊与搜索页 · 图片直链"
+            )
+        }
 
-        item { SectionHeader("书库") }
-        item { SettingRow("册数", "${lib.comics.size} 册") }
-        item { SettingRow("总页数", "$totalPages 页") }
-        item { SettingRow("本地缓存", "$cachedTotal 页") }
-        item { SettingRow("链接记录", "${lib.links.size} 条") }
-
-        item { SectionHeader("操作") }
-        item { SettingRow("检查更新", onClick = onCheckUpdates) }
-        item { SettingRow("导出书架 TXT", onClick = { onExport(ExportKind.TXT, null) }) }
-        item { SettingRow("清空全部缓存", onClick = onClearAllCache) }
+        // ── 数据 ──
+        item { SectionHeader("数据") }
+        item {
+            SettingRow(
+                "检查更新（重抓来源）",
+                subtitle = "按每册的来源链接重抓一遍，把新页合并进来",
+                onClick = onCheckUpdates
+            )
+        }
+        item {
+            SettingRow(
+                "导出书架 JSON",
+                subtitle = "备份到 下载/TGComic，含全部图片直链，可用来恢复",
+                onClick = { onExport(ExportKind.JSON, null) }
+            )
+        }
+        item {
+            SettingRow(
+                "导出书架 TXT",
+                subtitle = "纯文本清单，方便贴到别处",
+                onClick = { onExport(ExportKind.TXT, null) }
+            )
+        }
+        item {
+            SettingRow(
+                "从备份恢复",
+                subtitle = "选一个 tgcomic-*.json，按来源链接去重合并",
+                onClick = onImportBackup
+            )
+        }
+        item {
+            SettingRow(
+                "本地缓存",
+                value = "$cachedTotal 页",
+                subtitle = "清空后需要重新缓存才能离线看"
+            )
+        }
+        item { SettingRow("清空全部缓存", danger = true, onClick = onClearAllCache) }
         item { SettingRow("清空链接记录", danger = true, onClick = onClearLinks) }
 
+        // ── 更新 ──
         item { SectionHeader("更新") }
         item {
             SettingRow(
                 "检查软件更新",
                 value = "当前 v${BuildConfig.VERSION_NAME}",
+                subtitle = "从 GitHub Releases 查最新版，下载后提示安装",
                 onClick = onCheckAppUpdate
             )
         }
         item {
             SettingRow(
-                "自动更新：${if (autoUpdate) "开" else "关"}",
-                value = if (autoUpdate) "下载后提示安装" else "手动检查",
+                "自动更新",
+                value = if (autoUpdate) "开" else "关",
+                subtitle = "启动时静默检查（12 小时一次），有新版自动下载",
                 onClick = {
                     autoUpdate = !autoUpdate
                     prefs.autoUpdate = autoUpdate
@@ -1116,9 +1289,30 @@ private fun SettingsContent(
             )
         }
 
+        // ── 关于 ──
         item { SectionHeader("关于") }
-        item { SettingRow("版本", BuildConfig.VERSION_NAME) }
-        item { SettingRow("构建", "versionCode ${BuildConfig.VERSION_CODE}") }
+        item {
+            SettingRow(
+                "版本",
+                value = BuildConfig.VERSION_NAME,
+                subtitle = "versionCode ${BuildConfig.VERSION_CODE}"
+            )
+        }
+        item {
+            SettingRow(
+                "开源地址",
+                value = "GitHub",
+                subtitle = "github.com/AdaJyao/TGComicReader",
+                onClick = {
+                    runCatching {
+                        ctx.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/AdaJyao/TGComicReader"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                }
+            )
+        }
     }
 
     if (showEhCookie) {

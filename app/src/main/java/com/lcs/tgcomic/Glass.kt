@@ -449,6 +449,7 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier) {
 fun SettingRow(
     title: String,
     value: String? = null,
+    subtitle: String? = null,
     danger: Boolean = false,
     onClick: (() -> Unit)? = null
 ) {
@@ -461,16 +462,27 @@ fun SettingRow(
                     indication = null
                 ) { onClick() } else Modifier
             )
-            .padding(horizontal = 22.dp, vertical = 14.dp),
+            .padding(horizontal = 22.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            title,
-            fontSize = 13.sp,
-            color = if (danger) Glass.Bad else Glass.Text,
-            modifier = Modifier.weight(1f)
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                fontSize = 13.sp,
+                color = if (danger) Glass.Bad else Glass.Text
+            )
+            if (subtitle != null) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    subtitle,
+                    fontSize = 10.5.sp,
+                    lineHeight = 14.sp,
+                    color = Glass.TextTertiary
+                )
+            }
+        }
         if (value != null) {
+            Spacer(Modifier.width(10.dp))
             Text(value, fontSize = 12.sp, color = Glass.TextDim)
         }
     }

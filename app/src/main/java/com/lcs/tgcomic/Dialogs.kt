@@ -592,6 +592,26 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
     }
 }
 
+// ══════════════ 通用提示弹窗 ══════════════
+
+@Composable
+fun InfoDialog(title: String, body: String, onDismiss: () -> Unit) {
+    GlassDialog(onDismiss) {
+        Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
+        Spacer(Modifier.height(10.dp))
+        Text(body, fontSize = 12.5.sp, lineHeight = 19.sp, color = Glass.TextDim)
+        Spacer(Modifier.height(18.dp))
+        Row(Modifier.fillMaxWidth()) {
+            GlassPill(
+                "好",
+                filled = true,
+                modifier = Modifier.fillMaxWidth().height(42.dp),
+                onClick = onDismiss
+            )
+        }
+    }
+}
+
 // ══════════════ 软件更新 ══════════════
 
 @Composable
