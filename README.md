@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.19 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.20 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -31,6 +31,7 @@
 | [v2.17](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.17) | 支持 E-Hentai / ExHentai（含搜索页批量导入）、内置自动更新、修 7 个历史问题 |
 | [v2.18](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.18) | 设置页重做（七段式 + 说明文字 + 备份恢复）、电报链接兜底 |
 | [v2.19](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.19) | 支持紳士漫畫 wnacg、站内登录 ExHentai 自动存 Cookie、图片缓存与界面动画 |
+| [v2.20](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.20) | 修 ExHentai 登录卡 Cloudflare 验证、修「能导入但阅读器一片空白」 |
 
 ## 构建
 
@@ -755,3 +756,42 @@ PNG 位图同步重生成（5 个密度 + 圆形版）。
 - 书架 ↔ 详情 ↔ 阅读器：**淡入淡出**切换（210ms），不再瞬切
 - 弹窗：淡入 + 从 94% 轻微放大上浮；底部菜单：从底部滑入
 - 书架网格：增删册子有 `animateItem()` 过渡
+
+---
+
+## 2.20 修 ExHentai 登录卡 CF + 修「导入成功但打开无图」
+
+### 一、ExHentai 登录不再卡在 Cloudflare 验证
+
+**根因**：登录页把 WebView 的 UA 覆盖成了「Chrome 126」字符串，但 WebView 发出的
+`Sec-CH-UA` 客户端提示头不会跟着变 —— Cloudflare 看到 UA 和 client hints 对不上，
+就判定成可疑客户端，表现就是无限「Performing security verification」。
+
+处理：
+
+- **不再覆盖 UA**，用 WebView 自己的默认 UA（两者自洽，CF 能过）。实测登录表单已正常出现，
+  表单里是 CF Turnstile 小组件（等几秒或点一下即可），然后输账号密码。
+- 顶部加「重载」；12 秒没打开提示网络（国内要代理）；**28 秒还停在验证页**会提示：
+  点重载再等十几秒，反复过不去就改用浏览器登录后粘贴 Cookie。
+- 页面里点到 exhentai.org 链接一律交给系统浏览器（应用内不做 CF 验证）。
+- 抓到 Cookie 后**先验证再保存**：用这个 Cookie 请求一次 exhentai.org，
+  能拿到正文才算成功；返回 sad panda 会明确告诉你账号没权限。
+- 新增 CF 识别：EH 页面返回人机验证页时，报「触发了 Cloudflare 人机验证，用手机浏览器打开一次
+  e-hentai.org 过验证再回来」，不再伪装成「画廊解析失败」。
+
+### 二、修「能导入书架，但打开全是无图、加载极慢」
+
+**根因**：看图页（wnacg 的 `photos-view-id`、EH 的 `/s/<hash>/…`）要先换直链，
+而旧逻辑是**翻到哪页才去解析哪页**：每页一次站点请求（EH 限速 1.3s、wnacg 0.5s），
+多个页面同时进入可视区就排队 → 体感「极慢 + 一片空白」。
+而「缓存整册」走的是另一条下载通道（`Net.download`，带 Referer/UA/重试），所以缓存完就能看。
+
+三处修复：
+
+1. **预解析**：打开书或翻页时，后台先把**后面 4 页**的直链换好（`pageDirs` 记忆表），
+   翻到的时候直接用，不再每页等一次请求。wnacg 看图页间隔也从 500ms 降到 250ms。
+2. **图片请求带重试**：全局 ImageLoader 的 OkHttp 客户端对图片请求做 3 次尝试、退避 350ms，
+   读超时 15s→45s，每主机并发 5→8。图床抖动时不会一次失败就空白。
+3. **失败自动兜底到本地**：某页远程加载失败时，自动用 `Net.download` 把这页存进缓存目录再显示
+   （和「缓存整册」同一条通道，成功率高得多），显示「网络慢，正在把这一页存到本地…」；
+   两条路都失败才提示点击重试。顺带把这一页变成已缓存。

@@ -57,8 +57,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ReaderScreen(
@@ -105,10 +111,29 @@ fun ReaderScreen(
         initialPage = start,
         pageCount = { comic.pages.size }
     )
+    // 看图页（wnacg/EH）要先换成直链。打开就把后面几页解析好，翻到就能显示，
+    // 不然每翻一页都要等一次站点请求（体感就是「极慢 + 一片空白」）
+    val pageDirs = remember(comic.id) { mutableStateMapOf<String, String>() }
     val current = if (mode == ReaderMode.VERTICAL) listState.firstVisibleItemIndex
     else pagerState.currentPage
 
     LaunchedEffect(current) { onProgress(current) }
+
+    LaunchedEffect(comic.id, current) {
+        var done = 0
+        var i = current
+        while (done < PREFETCH_AHEAD && i < comic.pages.size) {
+            val u = comic.pages[i]
+            if (isPendingPage(u) && !pageDirs.containsKey(u)) {
+                val direct = runCatching { PageResolver.direct(u, prefs.ehCookie) }.getOrNull()
+                if (direct != null) {
+                    pageDirs[u] = direct
+                    done++
+                }
+            }
+            i++
+        }
+    }
 
     fun goto(index: Int) {
         val i = index.coerceIn(0, last)
@@ -123,7 +148,7 @@ fun ReaderScreen(
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 itemsIndexed(comic.pages) { i, url ->
                     var retry by remember(url) { mutableStateOf(0) }
-                    val load = rememberPageLoad(ctx, comic.id, i, url, prefs.ehCookie, retry)
+                    val load = rememberPageLoad(ctx, comic.id, i, url, prefs.ehCookie, retry, pageDirs[url])
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -145,11 +170,13 @@ fun ReaderScreen(
                     ) {
                         val m = load.model
                         if (m != null) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(ctx).data(m).crossfade(true).build(),
-                                contentDescription = "第${i + 1}页",
+                            PageView(
+                                model = m,
+                                file = pageFileOf(ctx, comic.id, i),
                                 modifier = Modifier.fillMaxWidth(),
-                                contentScale = ContentScale.FillWidth
+                                contentScale = ContentScale.FillWidth,
+                                desc = "第${i + 1}页",
+                                onRetry = { retry++ }
                             )
                         } else {
                             PendingPage(
@@ -169,7 +196,7 @@ fun ReaderScreen(
             ) { page ->
                 val url = comic.pages.getOrNull(page) ?: ""
                 var retry by remember(url) { mutableStateOf(0) }
-                val load = rememberPageLoad(ctx, comic.id, page, url, prefs.ehCookie, retry)
+                val load = rememberPageLoad(ctx, comic.id, page, url, prefs.ehCookie, retry, pageDirs[url])
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -191,11 +218,13 @@ fun ReaderScreen(
                 ) {
                     val m = load.model
                     if (m != null) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(ctx).data(m).crossfade(true).build(),
-                            contentDescription = "第${page + 1}页",
+                        PageView(
+                            model = m,
+                            file = pageFileOf(ctx, comic.id, page),
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
+                            contentScale = ContentScale.Fit,
+                            desc = "第${page + 1}页",
+                            onRetry = { retry++ }
                         )
                     } else {
                         PendingPage(index = page, failed = load.failed, message = load.message, onClick = { retry++ })
@@ -342,7 +371,7 @@ fun ReaderScreen(
         zoomPage?.let { idx ->
             val url = comic.pages.getOrNull(idx) ?: ""
             var zRetry by remember(url) { mutableStateOf(0) }
-            val load = rememberPageLoad(ctx, comic.id, idx, url, prefs.ehCookie, zRetry)
+            val load = rememberPageLoad(ctx, comic.id, idx, url, prefs.ehCookie, zRetry, pageDirs[url])
             var zScale by remember(idx) { mutableStateOf(1f) }
             var zOffset by remember(idx) { mutableStateOf(Offset.Zero) }
             Box(
@@ -361,9 +390,9 @@ fun ReaderScreen(
             ) {
                 val zm = load.model
                 if (zm != null) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(ctx).data(zm).crossfade(true).build(),
-                        contentDescription = null,
+                    PageView(
+                        model = zm,
+                        file = pageFileOf(ctx, comic.id, idx),
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer {
@@ -372,7 +401,9 @@ fun ReaderScreen(
                                 translationX = zOffset.x
                                 translationY = zOffset.y
                             },
-                        contentScale = ContentScale.Fit
+                        contentScale = ContentScale.Fit,
+                        desc = "第${idx + 1}页",
+                        onRetry = { zRetry++ }
                     )
                 } else {
                     PendingPage(index = idx, failed = load.failed, message = load.message, onClick = { zRetry++ })
@@ -472,14 +503,20 @@ private fun rememberPageLoad(
     index: Int,
     url: String,
     cookie: String,
-    retry: Int
+    retry: Int,
+    known: String? = null
 ): PageLoad {
     val cached = remember(index, url) { pageModel(ctx, comicId, index, url) }
     val pending = remember(url) { isPendingPage(url) }
     val state = produceState<PageLoad>(
-        initialValue = if (cached is java.io.File) PageLoad(cached) else PageLoad(),
+        initialValue = when {
+            cached is java.io.File -> PageLoad(cached)
+            known != null -> PageLoad(known)
+            else -> PageLoad()
+        },
         key1 = url,
-        key2 = retry
+        key2 = retry,
+        key3 = known
     ) {
         if (cached is java.io.File) {
             value = PageLoad(cached)
@@ -487,6 +524,11 @@ private fun rememberPageLoad(
         }
         if (!pending) {
             value = PageLoad(cached)
+            return@produceState
+        }
+        // 预解析已经拿到直链：直接用，不再请求
+        if (known != null) {
+            value = PageLoad(known)
             return@produceState
         }
         value = PageLoad()
@@ -519,5 +561,95 @@ private fun PendingPage(index: Int, failed: Boolean, message: String = "", onCli
             color = if (failed) Glass.Warn else Glass.TextDim,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
+    }
+}
+
+
+/** 预解析领先页数：打开就先把后面几页的直链换好 */
+private const val PREFETCH_AHEAD = 4
+
+/**
+ * 单页显示：本地已缓存 → 直接读数；远程 → Coil 直连，失败时自动用 Net.download
+ * 把这一页存到本地再显示（和「缓存整册」走同一条下载通道，成功率高得多）。
+ * 两条路都失败才提示点击重试。
+ */
+@Composable
+private fun PageView(
+    model: Any,
+    file: java.io.File?,
+    modifier: Modifier,
+    contentScale: ContentScale,
+    desc: String,
+    onRetry: () -> Unit
+) {
+    val ctx = LocalContext.current
+    var cur by remember(model) { mutableStateOf(model) }
+    var phase by remember(model) { mutableStateOf(0) } // 0 正常 / 1 兜底下载中 / 2 失败
+
+    // 兜底下载用 LaunchedEffect 驱动：不能从 onState 回调里 launch（
+    // 那个 scope 一旦随重建离开组合就会抛「The coroutine scope left the composition」）
+    LaunchedEffect(phase, model) {
+        if (phase != 1) return@LaunchedEffect
+        val remote = cur as? String ?: return@LaunchedEffect
+        val target = file
+        if (target == null) {
+            phase = 2
+            return@LaunchedEffect
+        }
+        val ok = withContext(Dispatchers.IO) {
+            runCatching { Net.download(remote, target) && target.length() > 1024 }.getOrDefault(false)
+        }
+        if (ok) {
+            cur = target
+            phase = 0
+        } else {
+            phase = 2
+        }
+    }
+
+    Box(modifier, contentAlignment = Alignment.Center) {
+        when (val m = cur) {
+            is java.io.File -> AsyncImage(
+                model = ImageRequest.Builder(ctx).data(m).crossfade(120).build(),
+                contentDescription = desc,
+                modifier = Modifier.fillMaxWidth().wrapContentHeight(),
+                contentScale = contentScale
+            )
+            else -> {
+                val remote = m as? String
+                if (remote == null) {
+                    PendingPage(index = 0, failed = true, message = "这一页没有地址", onClick = onRetry)
+                } else {
+                    AsyncImage(
+                        model = ImageRequest.Builder(ctx).data(remote).crossfade(true).build(),
+                        contentDescription = desc,
+                        modifier = Modifier.fillMaxWidth().wrapContentHeight(),
+                        contentScale = contentScale,
+                        onState = { st ->
+                            if (st is AsyncImagePainter.State.Error && phase == 0) {
+                                phase = if (file == null) 2 else 1
+                            }
+                        }
+                    )
+                    when (phase) {
+                        1 -> Text(
+                            "网络慢，正在把这一页存到本地…",
+                            fontSize = 11.sp,
+                            color = Glass.TextDim
+                        )
+                        2 -> Text(
+                            "这一页没加载出来，点一下重试",
+                            fontSize = 11.sp,
+                            color = Glass.Warn,
+                            modifier = Modifier.clickable {
+                                phase = 0
+                                cur = model
+                                onRetry()
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 }

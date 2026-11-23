@@ -100,8 +100,8 @@ object WnacgApi {
 
     private var lastAt = 0L
 
-    private suspend fun throttle() {
-        val wait = THROTTLE_MS - (System.currentTimeMillis() - lastAt)
+    private suspend fun throttle(ms: Long = THROTTLE_MS) {
+        val wait = ms - (System.currentTimeMillis() - lastAt)
         if (wait > 0) delay(wait)
         lastAt = System.currentTimeMillis()
     }
@@ -115,8 +115,8 @@ object WnacgApi {
         )
     }
 
-    private suspend fun getHtml(url: String): String {
-        throttle()
+    private suspend fun getHtml(url: String, throttleMs: Long = THROTTLE_MS): String {
+        throttle(throttleMs)
         val html = Net.getText(url, headers(url), retries = 2)
         if (html.isBlank()) throw IOException("wnacg 返回空页面，稍后重试")
         return html
@@ -173,7 +173,8 @@ object WnacgApi {
     /** 看图页 → 图片直链（verify 令牌有时效，别长期保存） */
     suspend fun resolvePage(viewUrl: String): String? {
         if (!isViewPage(viewUrl)) return null
-        val html = getHtml(viewUrl)
+        // 看图页只是普通 HTML，间隔放到 250ms：翻页/预解析才跟得上手
+        val html = getHtml(viewUrl, throttleMs = 250L)
         val raw = FULL_IMG.find(html)?.groupValues?.get(1) ?: return null
         return https(raw)
     }

@@ -99,8 +99,12 @@ fun copyToClipboard(ctx: Context, text: String) {
     cm.setPrimaryClip(ClipData.newPlainText("tgcomic", text))
 }
 
+/** 单页缓存文件的位置（和 Library.pageFile 一致） */
+fun pageFileOf(ctx: Context, comicId: String, index: Int): File =
+    File(File(File(ctx.filesDir, "comics"), comicId), "%04d.img".format(index))
+
 fun pageModel(ctx: Context, comicId: String, index: Int, url: String): Any {
-    val f = File(File(File(ctx.filesDir, "comics"), comicId), "%04d.img".format(index))
+    val f = pageFileOf(ctx, comicId, index)
     return if (f.exists() && f.length() > 1024) f else url
 }
 

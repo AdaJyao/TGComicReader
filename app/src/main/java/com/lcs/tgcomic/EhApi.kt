@@ -181,6 +181,9 @@ object EhApi {
 
         throttle()
         val html = Net.getText(url, headers(url, cookie), retries = 2)
+        if (Net.looksLikeChallenge(html)) {
+            throw IOException("e-hentai 触发了 Cloudflare 人机验证：用手机浏览器打开一次 e-hentai.org 过验证，再回来重试")
+        }
 
         detectBan(html)?.let { ms ->
             banUntil = System.currentTimeMillis() + ms

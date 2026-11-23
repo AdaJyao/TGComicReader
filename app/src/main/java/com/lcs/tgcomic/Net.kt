@@ -18,6 +18,20 @@ object Net {
     /** E-Hentai 的 509（请求太快）单独抛出，避免无脑重试把封禁时间拖长 */
     class RateLimited(message: String) : IOException(message)
 
+    /**
+     * Cloudflare 人机验证页：e-hentai / exhentai 现在整站在 CF 后面，
+     * 拿到这类页面时不能当成「页面结构变了」，要单独给用户提示。
+     */
+    fun looksLikeChallenge(html: String): Boolean {
+        if (html.length > 20000) return false
+        val h = html.lowercase()
+        return h.contains("just a moment") ||
+            h.contains("cf-challenge") ||
+            h.contains("performing security verification") ||
+            h.contains("challenge-platform") ||
+            h.contains("attention required")
+    }
+
     /** 把含中文/空格的 URL 变成合法 URL */
     fun safeUrl(raw: String): String {
         return try {

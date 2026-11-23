@@ -22,9 +22,11 @@ class TgApp : Application(), ImageLoaderFactory {
 
     val okHttp: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            // 图床（尤其 hath.network）在移动网络下偶尔几十秒才回，给宽一点
+            .readTimeout(45, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .dispatcher(okhttp3.Dispatcher().apply { maxRequestsPerHost = 8 })
             .addInterceptor { chain ->
                 val req = chain.request()
                 val host = req.url.host.lowercase()
@@ -39,7 +41,21 @@ class TgApp : Application(), ImageLoaderFactory {
                     else -> null
                 }
                 if (ref != null) b.header("Referer", ref)
-                chain.proceed(b.build())
+                val req2 = b.build()
+                // 图片请求做两次重试：图床抖动/超时很常见，Coil 自己不会重试，
+                // 一失败就是「一片空白」，用户只能等整册缓存完才有图
+                var last: Exception? = null
+                for (attempt in 0 until 3) {
+                    try {
+                        return@addInterceptor chain.proceed(req2)
+                    } catch (e: java.io.IOException) {
+                        last = e
+                        if (attempt < 2) {
+                            runCatching { Thread.sleep(350L * (attempt + 1)) }
+                        }
+                    }
+                }
+                throw last ?: java.io.IOException("请求失败")
             }
             .build()
     }
