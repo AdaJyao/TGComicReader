@@ -10,7 +10,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -108,6 +111,10 @@ fun ShelfScreen(
 
     val selectMode = selected.isNotEmpty()
     val ctx = LocalContext.current
+    // 已缓存页数在后台预热：书架每格都要显示「⤓N」，滚动时不能去扫目录
+    LaunchedEffect(lib.tick.value, lib.comics.size) {
+        withContext(Dispatchers.IO) { lib.warmCacheCounts() }
+    }
     var infoDialog by remember { mutableStateOf<String?>(null) }
 
     // 从备份 JSON 恢复书架（系统文件选择器）
@@ -120,6 +127,10 @@ fun ShelfScreen(
             infoDialog = "读取备份文件失败，确认选的是导出的 tgcomic-*.json"
         } else {
             val result = lib.importJson(text)
+            // 必须落盘：importJson 只改内存，不 save 的话重启就回到恢复前
+            if (result != null) {
+                Thread { runCatching { lib.save() } }.start()
+            }
             infoDialog = if (result == null) {
                 "这不是有效的书架备份：JSON 解析失败（文件可能被改坏或不是 TG漫画 导出的）"
             } else {
@@ -134,9 +145,12 @@ fun ShelfScreen(
     }
     @Suppress("UNUSED_VARIABLE")
     val tick = lib.tick.value
-    val all = lib.sortComics(sort, favFirst)
-    val shown = if (query.isBlank()) all else all.filter {
-        it.title.contains(query, ignoreCase = true) || it.author.contains(query, ignoreCase = true)
+    // 排序/过滤只在书架、排序、搜索词变化时重算：滚动时不再每帧排一遍
+    val shown = remember(tick, sort, favFirst, query) {
+        val all = lib.sortComics(sort, favFirst)
+        if (query.isBlank()) all else all.filter {
+            it.title.contains(query, ignoreCase = true) || it.author.contains(query, ignoreCase = true)
+        }
     }
 
     fun toggleSelect(id: String) {
@@ -242,8 +256,6 @@ fun ShelfScreen(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         gridItems(shown, key = { it.id }) { c ->
-                            // 动画：新增/删除册子时有淡入淡出，不会硬闪
-                            Box(Modifier.animateItem()) {
                             ComicTile(
                                 comic = c,
                                 cached = lib.cachedPageCount(c.id),
@@ -255,7 +267,6 @@ fun ShelfScreen(
                                 onLongClick = { toggleSelect(c.id) },
                                 onMenu = { menuFor = c }
                             )
-                            }
                         }
                     }
                 } else {
@@ -623,7 +634,7 @@ private fun ComicTile(
                 .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(),
+                model = ImageRequest.Builder(ctx).data(cover).size(360, 480).crossfade(true).build(),
                 contentDescription = comic.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -768,7 +779,7 @@ private fun ComicRow(
                 .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(),
+                model = ImageRequest.Builder(ctx).data(cover).size(240, 320).crossfade(true).build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -1093,6 +1104,12 @@ private fun SettingsContent(
     var keepOn by remember { mutableStateOf(prefs.keepScreenOn) }
     var ehCookieSet by remember { mutableStateOf(prefs.ehCookie.isNotBlank()) }
     var showEhCookie by remember { mutableStateOf(false) }
+    // WebDAV
+    var showDav by remember { mutableStateOf(false) }
+    var davReady by remember { mutableStateOf(prefs.webdavReady) }
+    var davBusy by remember { mutableStateOf("") }
+    var davInfo by remember { mutableStateOf<String?>(null) }
+    val davScope = rememberCoroutineScope()
     @Suppress("UNUSED_VARIABLE") val tickVersion = lib.tick.value
     val ctx = LocalContext.current
     // 登录页回来：Cookie 已写进 Prefs，这里只需要刷新显示
@@ -1281,6 +1298,82 @@ private fun SettingsContent(
         }
         item {
             SettingRow(
+                "WebDAV 备份",
+                value = if (davReady) "已配置" else "未配置",
+                subtitle = "坚果云 / Nextcloud 等；地址填目录，文件固定为 ${WebDav.FILE}",
+                onClick = { showDav = true }
+            )
+        }
+        item {
+            SettingRow(
+                "备份到 WebDAV",
+                value = if (davBusy == "up") "上传中…" else "",
+                subtitle = "把书架 JSON 传到服务器，换手机/重装后能拉回来",
+                onClick = {
+                    if (!prefs.webdavReady) {
+                        davInfo = "先在「WebDAV 备份」里填服务器地址"
+                    } else if (davBusy.isEmpty()) {
+                        davScope.launch {
+                            davBusy = "up"
+                            val r = runCatching {
+                                withContext(Dispatchers.IO) {
+                                    WebDav.put(prefs.webdavUrl, prefs.webdavUser, prefs.webdavPass, lib.exportJson())
+                                }
+                            }
+                            davBusy = ""
+                            davInfo = r.fold(
+                                { url -> "已上传 ${lib.comics.size} 册书架 → $url" },
+                                { e -> "上传失败：${e.message ?: "网络错误"}" }
+                            )
+                        }
+                    }
+                }
+            )
+        }
+        item {
+            SettingRow(
+                "从 WebDAV 恢复",
+                value = if (davBusy == "down") "下载中…" else "",
+                subtitle = "拉回 ${WebDav.FILE}，按来源链接去重合并（不动本地已有缓存）",
+                onClick = {
+                    if (!prefs.webdavReady) {
+                        davInfo = "先在「WebDAV 备份」里填服务器地址"
+                    } else if (davBusy.isEmpty()) {
+                        davScope.launch {
+                            davBusy = "down"
+                            val r = runCatching {
+                                withContext(Dispatchers.IO) {
+                                    WebDav.get(prefs.webdavUrl, prefs.webdavUser, prefs.webdavPass)
+                                }
+                            }
+                            davBusy = ""
+                            val err = r.exceptionOrNull()
+                            if (err != null) {
+                                davInfo = "下载失败：${err.message ?: "网络错误"}"
+                            } else {
+                                val text = r.getOrDefault("")
+                                // 解析 + 落盘都放 IO 线程：importJson 只改内存，不 save 重启就丢
+                                val result = withContext(Dispatchers.IO) {
+                                    lib.importJson(text)?.also { lib.save() }
+                                }
+                                davInfo = if (result == null) {
+                                    "服务器上的文件不是有效的书架备份"
+                                } else {
+                                    val (added, merged) = result
+                                    when {
+                                        added == 0 && merged == 0 -> "服务器上的册子都已经在书架上了"
+                                        merged > 0 -> "已恢复：新增 $added 册，另有 $merged 册补全了缺页"
+                                        else -> "已恢复：新增 $added 册"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        }
+        item {
+            SettingRow(
                 "本地缓存",
                 value = "$cachedTotal 页",
                 subtitle = "清空后需要重新缓存才能离线看"
@@ -1348,6 +1441,34 @@ private fun SettingsContent(
                 showEhCookie = false
             }
         )
+    }
+
+    if (showDav) {
+        WebDavDialog(
+            url = prefs.webdavUrl,
+            user = prefs.webdavUser,
+            pass = prefs.webdavPass,
+            onDismiss = { showDav = false },
+            onConfirm = { u, n, w ->
+                prefs.webdavUrl = u
+                prefs.webdavUser = n
+                prefs.webdavPass = w
+                davReady = prefs.webdavReady
+                showDav = false
+            }
+        )
+    }
+
+    if (davInfo != null) {
+        GlassDialog(onDismiss = { davInfo = null }) {
+            Text("WebDAV", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
+            Spacer(Modifier.height(8.dp))
+            Text(davInfo ?: "", fontSize = 12.sp, lineHeight = 18.sp, color = Glass.TextDim)
+            Spacer(Modifier.height(14.dp))
+            GlassPill("好", selected = true, modifier = Modifier.fillMaxWidth().height(42.dp)) {
+                davInfo = null
+            }
+        }
     }
 }
 

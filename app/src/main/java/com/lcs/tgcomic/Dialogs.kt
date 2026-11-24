@@ -55,6 +55,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -66,8 +67,11 @@ import coil.request.ImageRequest
 fun GlassDialog(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    // 弹窗圆角：24dp 太大（导入/更新弹窗看着像药丸），统一收到 16dp
+    radius: Dp = 16.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val shape = RoundedCornerShape(radius)
     BackHandler(enabled = true) { onDismiss() }
     Box(
         modifier = Modifier
@@ -92,9 +96,9 @@ fun GlassDialog(
                 Modifier
                     .padding(horizontal = 24.dp)
                     .fillMaxWidth()
-                    .clip(Glass.R24)
+                    .clip(shape)
                     .background(Glass.palette.panelTop)
-                    .border(1.dp, Glass.palette.outline, Glass.R24)
+                    .border(1.dp, Glass.palette.outline, shape)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
@@ -775,6 +779,92 @@ fun EhCookieDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -
                     onClick = { onConfirm(text.trim()) }
                 )
             }
+        }
+    }
+}
+
+
+/** WebDAV 配置：地址（目录）/ 账号 / 密码 */
+@Composable
+fun WebDavDialog(
+    url: String,
+    user: String,
+    pass: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, String) -> Unit
+) {
+    var u by remember { mutableStateOf(url) }
+    var n by remember { mutableStateOf(user) }
+    var w by remember { mutableStateOf(pass) }
+
+    GlassDialog(onDismiss) {
+        Text(
+            "WebDAV 备份",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Glass.Text
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "地址填目录（例：坚果云 https://dav.jianguoyun.com/dav/我的坚果云），" +
+                "备份文件固定叫 tgcomic-backup.json；也可以直接填到 .json 结尾的完整地址。",
+            fontSize = 11.sp,
+            lineHeight = 17.sp,
+            color = Glass.TextDim
+        )
+        Spacer(Modifier.height(12.dp))
+
+        DavField("服务器地址", u, single = true) { u = it }
+        Spacer(Modifier.height(8.dp))
+        DavField("账号", n, single = true) { n = it }
+        Spacer(Modifier.height(8.dp))
+        DavField("密码 / 应用密码", w, single = true, secret = true) { w = it }
+
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            GlassPill("取消", modifier = Modifier.weight(1f).height(42.dp), onClick = onDismiss)
+            GlassPill(
+                "保存",
+                selected = true,
+                enabled = u.isNotBlank(),
+                modifier = Modifier.weight(1f).height(42.dp)
+            ) { onConfirm(u, n, w) }
+        }
+    }
+}
+
+@Composable
+private fun DavField(
+    label: String,
+    value: String,
+    single: Boolean,
+    secret: Boolean = false,
+    onChange: (String) -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, fontSize = 10.5.sp, color = Glass.TextDim)
+        Spacer(Modifier.height(4.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 40.dp)
+                .clip(Glass.R14)
+                .background(Glass.palette.inputField)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onChange,
+                singleLine = single,
+                textStyle = TextStyle(color = Glass.Text, fontSize = 12.5.sp),
+                cursorBrush = SolidColor(Glass.Accent),
+                visualTransformation = if (secret) {
+                    androidx.compose.ui.text.input.PasswordVisualTransformation()
+                } else {
+                    androidx.compose.ui.text.input.VisualTransformation.None
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

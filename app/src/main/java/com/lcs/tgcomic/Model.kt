@@ -140,6 +140,22 @@ class Prefs(ctx: Context) {
         get() = sp.getString("ehCookie", "") ?: ""
         set(v) = sp.edit().putString("ehCookie", v.trim()).apply()
 
+    // ---- WebDAV 备份 ----
+    var webdavUrl: String
+        get() = sp.getString("webdavUrl", "") ?: ""
+        set(v) = sp.edit().putString("webdavUrl", v.trim()).apply()
+
+    var webdavUser: String
+        get() = sp.getString("webdavUser", "") ?: ""
+        set(v) = sp.edit().putString("webdavUser", v.trim()).apply()
+
+    var webdavPass: String
+        get() = sp.getString("webdavPass", "") ?: ""
+        set(v) = sp.edit().putString("webdavPass", v).apply()
+
+    val webdavReady: Boolean
+        get() = webdavUrl.isNotBlank()
+
     /** 自动检查并下载新版本（安装仍需系统确认） */
     var autoUpdate: Boolean
         get() = sp.getBoolean("autoUpdate", true)
@@ -413,15 +429,37 @@ class Library(private val ctx: Context) {
     fun pageFile(comicId: String, index: Int): File =
         File(File(comicDir, comicId), "%04d.img".format(index))
 
-    fun cachedPageCount(comicId: String): Int {
+    /**
+     * 已缓存页数。**必须缓存结果**：书架每个格子都会在滚动时重组，
+     * 原来每次都 `listFiles()` 扫一遍目录 → 主线程磁盘 IO，滑起来就卡。
+     */
+    private val cacheCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    fun cachedPageCount(comicId: String): Int =
+        cacheCounts.getOrPut(comicId) { computeCachedPageCount(comicId) }
+
+    private fun computeCachedPageCount(comicId: String): Int {
         val d = File(comicDir, comicId)
         if (!d.isDirectory) return 0
         // 与 pageModel 的判定保持一致：>1KB 才算一张有效页
         return d.listFiles()?.count { it.length() > 1024 } ?: 0
     }
 
+    /** 缓存/清缓存后让计数失效（传 null 清全部） */
+    fun invalidateCacheCount(comicId: String? = null) {
+        if (comicId == null) cacheCounts.clear() else cacheCounts.remove(comicId)
+    }
+
+    /** 后台预热：把每册的已缓存页数先算好，滚动时就是纯内存读取 */
+    fun warmCacheCounts() {
+        for (c in comics.toList()) {
+            runCatching { cacheCounts[c.id] = computeCachedPageCount(c.id) }
+        }
+    }
+
     fun clearCache(comicId: String) {
         File(comicDir, comicId).deleteRecursively()
+        invalidateCacheCount(comicId)
         tick.value++
     }
 

@@ -540,7 +540,10 @@ class MainActivity : ComponentActivity() {
                     val direct = runCatching { resolveIfNeeded(c, i) }.getOrNull()
                     val good = if (f.exists() && f.length() > 1024) true
                     else withContext(Dispatchers.IO) { Net.download(direct ?: url, f) }
-                    if (good) ok++
+                    if (good) {
+                        ok++
+                        lib.invalidateCacheCount(c.id)   // 让书架上的「⤓N」立刻对
+                    }
                     cacheState = CacheState(c.id, i + 1, total, c.title, ci + 1, list.size)
                 }
                 okTotal += ok
@@ -548,6 +551,8 @@ class MainActivity : ComponentActivity() {
             }
             val cancelled = !isActive
             cacheState = null
+            lib.invalidateCacheCount()
+            lib.tick.value++
             lib.tick.value++
             if (!cancelled) {
                 message = if (list.size == 1) "已缓存 $okTotal/$pagesTotal 页，可离线阅读"

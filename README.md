@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.21 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.22 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -33,6 +33,7 @@
 | [v2.19](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.19) | 支持紳士漫畫 wnacg、站内登录 ExHentai 自动存 Cookie、图片缓存与界面动画 |
 | [v2.20](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.20) | 修 ExHentai 登录卡 Cloudflare 验证、修「能导入但阅读器一片空白」 |
 | [v2.21](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.21) | 修 Telegram 解析：抓到的是频道头像 + 一个引号字符 |
+| [v2.22](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.22) | WebDAV 备份、书架滚动优化、弹窗圆角、修恢复不落盘 |
 
 ## 构建
 
@@ -828,3 +829,37 @@ PNG 位图同步重生成（5 个密度 + 圆形版）。
 
 实测：`t.me/telegram/452` → 共 1 张图（以前 2 张）；`t.me/telegram` → 共 20 张图，
 进阅读器 20 页图片全部正常显示。
+
+---
+
+## 2.22 WebDAV 备份 + 书架滚动优化 + 弹窗圆角
+
+### 一、书架滚动卡顿（真因：每帧扫磁盘）
+
+每格书架都要显示「⤓已缓存页数」，而 `cachedPageCount()` 每次都 `File.listFiles()` 数一遍目录 ——
+滚动时格子反复重组，就等于**在主线程上每帧做磁盘 IO**，册子越多越卡。
+
+- 页数改成**内存缓存 + 后台预热**（`warmCacheCounts()` 在 IO 线程先算好），滚动时是纯 Map 读取；
+  缓存/清缓存后按册失效
+- 去掉上版加的 `Modifier.animateItem()`（滚动时它给每个格子加动画簿记，实测拖后腿）
+- 封面按缩略图尺寸解码（`.size(360,480)` / 列表行 240×320），不再把 1200px 大图整张解进内存
+- 排序/过滤用 `remember(tick, sort, favFirst, query)` 缓存，滚动时不重排
+
+### 二、WebDAV 备份（新）
+
+设置 → 数据：
+- **WebDAV 备份**：填地址（目录，例 `https://dav.jianguoyun.com/dav/我的坚果云`）、账号、密码/应用密码
+- **备份到 WebDAV**：把书架 JSON 传到 `<地址>/tgcomic-backup.json`（目录不存在会自动 MKCOL）
+- **从 WebDAV 恢复**：拉回来按来源链接去重合并
+
+实现是自带的极简客户端（OkHttp + Basic 认证），错误会翻译成人话：401/403 认证失败、404 地址不存在、
+507 空间不足。地址也可以直接填到 `.json` 结尾。
+
+### 三、弹窗圆角
+
+`GlassDialog` 的圆角从 24dp 收到 **16dp**（导入链接、自动更新、WebDAV 等所有弹窗统一），不再像药丸。
+
+### 四、顺手修：从备份恢复不落盘
+
+`importJson()` 只改内存不写文件，恢复完重启就回到恢复前（2.18 起就存在）。
+现在本地恢复、WebDAV 恢复都会紧跟一次 `save()`，实测恢复 30 册后强制重启仍是 31 册。
