@@ -13,13 +13,16 @@ android {
         applicationId = "com.lcs.tgcomic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 42
-        versionName = "2.22"
+        versionCode = 43
+        versionName = "2.23"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // 关键：release 包是 non-debuggable，安装时会被 AOT 编译（speed）。
+            // 之前一直发的是 debug 包 → ART 跑解释器，Compose 滚动必然卡。
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }

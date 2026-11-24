@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.22 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.23 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -34,6 +34,7 @@
 | [v2.20](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.20) | 修 ExHentai 登录卡 Cloudflare 验证、修「能导入但阅读器一片空白」 |
 | [v2.21](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.21) | 修 Telegram 解析：抓到的是频道头像 + 一个引号字符 |
 | [v2.22](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.22) | WebDAV 备份、书架滚动优化、弹窗圆角、修恢复不落盘 |
+| [v2.23](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.23) | **改发 release 包（AOT 编译）**，修掉书架滚动卡顿的真因 |
 
 ## 构建
 
@@ -863,3 +864,40 @@ PNG 位图同步重生成（5 个密度 + 圆形版）。
 
 `importJson()` 只改内存不写文件，恢复完重启就回到恢复前（2.18 起就存在）。
 现在本地恢复、WebDAV 恢复都会紧跟一次 `save()`，实测恢复 30 册后强制重启仍是 31 册。
+
+---
+
+## 2.23 书架卡顿的真因：一直在发 debug 包
+
+前两版我都在优化代码（磁盘 IO、动画、图片解码），但用户装了还是卡。用 simpleperf 抓采样才看清：
+
+```
+debug 包（2.22）滚动时的 CPU 分布
+64.25%  libart.so        ← 其中 ExecuteSwitchImplCpp 10.9%（解释器分发）
+17.65%  [JIT app cache]
+ 0.45%  libhwui.so       ← 真正的绘制只有这么点
+```
+
+**64% 在 ART 解释器里** —— 也就是说 Kotlin/Compose 的代码根本没被编译，是逐条解释执行的。
+原因：之前发的全是 `app-debug.apk`，`debuggable` 标记会让 ART 用「解释器 + 有限 JIT」模式运行，
+Compose 每帧要调用成千上万个小函数，解释执行必然掉帧。
+
+修法：**改发 release 包**（非 debuggable → 安装时 AOT 编译，热路径走编译后的机器码）。
+同一份代码、同一台模拟器、同样的滚动操作，再测一遍：
+
+```
+release 包（2.23）滚动时的 CPU 分布
+ 7.16%  libart.so        ← 从 64% 降到 7%
+51.03%  goldfish_pipe.ko ← 模拟器的软件 GPU 管道（真机不存在）
+32.49%  [kernel.kallsyms]
+```
+
+顺带：
+- 开启 R8 压缩/资源收缩，APK 从 11MB 降到 **1.95MB**
+- 签名仍然沿用原来的 debug keystore，所以**可以直接覆盖安装**，不用卸载（书架/缓存都保住）
+- 之前几版的代码级优化（缓存页数内存缓存、封面按尺寸解码、去 animateItem）也都还在，release 包里一起生效
+
+### 关于「第一次打开可能还有点涩」
+
+sideload 的 release 包安装时是 `verify` 状态，ART 会在使用中把热方法 JIT 编译（几十秒内完成），
+之后就是编译后的代码。真机上滑两下就会顺；后台空闲时系统还会做一次全量 dexopt。
