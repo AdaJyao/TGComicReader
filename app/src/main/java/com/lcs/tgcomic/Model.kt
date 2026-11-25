@@ -545,6 +545,181 @@ class Library(private val ctx: Context) {
         return fresh.size
     }
 
+    // ---------------- 合并 / 预览 / 撤销 ----------------
+
+    /** 一次合并的结果预览（不含真正的改动） */
+    data class MergePlan(
+        val ids: List<String>,
+        val title: String,
+        val totalPages: Int,
+        val chapters: List<Pair<String, Int>>   // 章节名 → 页数
+    )
+
+    /** 整理前的预览：哪些册会被并成一组 / 哪些算重复 */
+    data class OrganizePlan(
+        val seriesGroups: List<MergePlan>,
+        val duplicatePairs: List<Pair<Comic, Comic>>,
+        val before: Int,
+        val after: Int
+    )
+
+    /** 合并预览：按加入时间排，最早的那册当主册 */
+    fun previewMerge(ids: Collection<String>): MergePlan? {
+        val list = ids.mapNotNull { id -> comics.firstOrNull { it.id == id } }
+            .sortedBy { it.addedAt }
+        if (list.size < 2) return null
+        val chapters = list.map { c -> (Titles.series(c.title).ifBlank { c.title }) to c.pages.size }
+        return MergePlan(
+            ids = list.map { it.id },
+            title = list.first().title,
+            totalPages = list.sumOf { it.pages.size },
+            chapters = chapters
+        )
+    }
+
+    /** 手动合并：早的留名，其余按时间顺序并进去（各算一章） */
+    fun mergeComics(ids: Collection<String>, title: String? = null): Comic? {
+        val plan = previewMerge(ids) ?: return null
+        snapshot()
+        val keep = comics.firstOrNull { it.id == plan.ids.first() } ?: return null
+        if (!title.isNullOrBlank()) keep.title = title.trim()
+        plan.ids.drop(1).forEach { id ->
+            val other = comics.firstOrNull { it.id == id } ?: return@forEach
+            mergePages(keep, other.pages, sameChapter = false, chapterName = other.title)
+            if (keep.cover.isBlank()) keep.cover = other.cover
+            if (keep.author.isBlank()) keep.author = other.author
+            dropCache(other.id)
+            comics.removeAll { it.id == other.id }
+        }
+        // 合并后系列名统一
+        keep.seriesKey = seriesKeyOf(keep.title, keep.sourceUrl)
+        tick.value++
+        save()
+        return keep
+    }
+
+    /** 只算不改：整理会做哪些事 */
+    fun planOrganize(mergeSameSeries: Boolean, removeDuplicates: Boolean): OrganizePlan {
+        val keys = comics.associate { it.id to seriesKeyOf(it.title, it.sourceUrl) }
+        val seriesGroups = ArrayList<MergePlan>()
+        if (mergeSameSeries) {
+            comics.groupBy { keys[it.id].orEmpty() }
+                .filterKeys { it.isNotEmpty() }
+                .forEach { (_, list) ->
+                    if (list.size >= 2) {
+                        previewMerge(list.map { it.id })?.let { seriesGroups += it }
+                    }
+                }
+        }
+        val dups = ArrayList<Pair<Comic, Comic>>()
+        if (removeDuplicates) {
+            var i = 0
+            val removed = HashSet<String>()
+            while (i < comics.size) {
+                var j = i + 1
+                while (j < comics.size) {
+                    val a = comics[i]; val b = comics[j]
+                    if (a.id !in removed && b.id !in removed && isDuplicatePair(a, b)) {
+                        dups += a to b
+                        removed += b.id
+                    }
+                    j++
+                }
+                i++
+            }
+        }
+        val after = comics.size -
+            dups.size -
+            seriesGroups.sumOf { g -> (g.ids.size - 1).coerceAtLeast(0) } +
+            dups.count { (a, b) -> seriesGroups.any { it.ids.contains(a.id) && it.ids.contains(b.id) } }
+        return OrganizePlan(seriesGroups, dups, comics.size, after.coerceAtMost(comics.size))
+    }
+
+    // ---- 撤销：操作前存一份快照，整理/合并后可以一键还原 ----
+
+    private var undoSnapshot: String? = null
+
+    fun canUndo(): Boolean = undoSnapshot != null
+
+    /** 操作前调用：把当前书架序列化存起来（内存里只留最近一次） */
+    fun snapshot() {
+        undoSnapshot = runCatching { comicsJson().toString() }.getOrNull()
+    }
+
+    fun undo(): Boolean {
+        val snap = undoSnapshot ?: return false
+        return runCatching {
+            restoreComics(snap)
+            undoSnapshot = null
+            tick.value++
+            save()
+            true
+        }.getOrDefault(false)
+    }
+
+    fun clearUndo() { undoSnapshot = null }
+
+    private fun comicsJson(): JSONArray {
+        val ca = JSONArray()
+        for (c in comics) {
+            ca.put(
+                JSONObject().apply {
+                    put("id", c.id)
+                    put("title", c.title)
+                    put("url", c.sourceUrl)
+                    put("lastIndex", c.lastIndex)
+                    put("addedAt", c.addedAt)
+                    put("updatedAt", c.updatedAt)
+                    put("author", c.author)
+                    put("favorite", c.favorite)
+                    put("cover", c.cover)
+                    put("pages", JSONArray(c.pages))
+                    put("seriesKey", c.seriesKey)
+                    put("chapterMarks", JSONArray(c.chapterMarks.toList()))
+                    put("chapterNames", JSONArray(c.chapterNames.toList()))
+                }
+            )
+        }
+        return ca
+    }
+
+    private fun restoreComics(json: String) {
+        val arr = JSONArray(json)
+        val restored = ArrayList<Comic>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val pages = mutableStateListOf<String>()
+            val pa = o.optJSONArray("pages") ?: JSONArray()
+            for (j in 0 until pa.length()) pages.add(pa.getString(j))
+            restored.add(
+                Comic(
+                    id = o.optString("id"),
+                    title = o.optString("title", "未命名"),
+                    sourceUrl = o.optString("url", ""),
+                    pages = pages,
+                    lastIndex = o.optInt("lastIndex", 0),
+                    addedAt = o.optLong("addedAt", System.currentTimeMillis()),
+                    author = o.optString("author", ""),
+                    updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
+                    favorite = o.optBoolean("favorite", false),
+                    cover = o.optString("cover", ""),
+                    seriesKey = o.optString("seriesKey", ""),
+                    chapterMarks = mutableStateListOf<Int>().also { l ->
+                        val ma = o.optJSONArray("chapterMarks")
+                        if (ma == null || ma.length() == 0) l.add(0)
+                        else for (k in 0 until ma.length()) l.add(ma.getInt(k))
+                    },
+                    chapterNames = mutableStateListOf<String>().also { l ->
+                        val na = o.optJSONArray("chapterNames")
+                        if (na != null) for (k in 0 until na.length()) l.add(na.getString(k))
+                    }
+                )
+            )
+        }
+        comics.clear()
+        comics.addAll(restored)
+    }
+
     data class OrganizeReport(
         val before: Int,
         val after: Int,
@@ -557,7 +732,8 @@ class Library(private val ctx: Context) {
      *   · 重算 seriesKey，把同一系列的多册并成一册（保留章节起点）
      *   · removeDuplicates=true 时再按多维规则清掉重复册（保留页数多的那本）
      */
-    fun organize(removeDuplicates: Boolean = true): OrganizeReport {
+    fun organize(removeDuplicates: Boolean = true, mergeSameSeries: Boolean = true): OrganizeReport {
+        snapshot()
         val before = comics.size
         // 每次都重算：规则改了（比如新增「剥掉纯数字尾巴」）老数据才会跟着归并
         comics.forEach { c -> c.seriesKey = seriesKeyOf(c.title, c.sourceUrl) }
@@ -590,7 +766,8 @@ class Library(private val ctx: Context) {
         }
 
         var merged = 0
-        val groups = comics.filter { it.seriesKey.isNotEmpty() }.groupBy { it.seriesKey }
+        val groups = if (mergeSameSeries) comics.filter { it.seriesKey.isNotEmpty() }.groupBy { it.seriesKey }
+        else emptyMap()
         groups.forEach { (_, list) ->
             if (list.size < 2) return@forEach
             val keep = list.minByOrNull { it.addedAt } ?: return@forEach
@@ -610,6 +787,10 @@ class Library(private val ctx: Context) {
         if (merged > 0 || dups > 0) save()
         return OrganizeReport(before, comics.size, merged, dups)
     }
+
+    /** UI 用：两个开关各管一件事 */
+    fun organizeWith(mergeSameSeries: Boolean, removeDuplicates: Boolean): OrganizeReport =
+        organize(removeDuplicates = removeDuplicates, mergeSameSeries = mergeSameSeries)
 
     /** 启动时的轻量版本：只归并同系列，不删重复（避免静默删书） */
     fun rebuildSeries() {

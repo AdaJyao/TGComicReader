@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -52,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -103,6 +105,12 @@ fun ShelfScreen(
     var sort by remember { mutableStateOf(prefs.sort) }
     var favFirst by remember { mutableStateOf(prefs.favoritesFirst) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // 书架自带的两个工具入口：整理（合并/清重）与链接记录
+    var showOrganize by remember { mutableStateOf(false) }
+    var showLinks by remember { mutableStateOf(false) }
+    var mergeIds by remember { mutableStateOf<Set<String>?>(null) }
+    var toast by remember { mutableStateOf("") }
+    var undoHint by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<Comic?>(null) }
     var renameFor by remember { mutableStateOf<Comic?>(null) }
     var confirmDelete by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -177,14 +185,36 @@ fun ShelfScreen(
     }
 
     AuroraBackground(animate = false) {
-        Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(tab, selectMode) {
+                    if (selectMode) return@pointerInput
+                    var dx = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dx = 0f },
+                        onDragEnd = {
+                            if (dx > 150f && tab > 0) { tab -= 1; selected = emptySet() }
+                            else if (dx < -150f && tab < 3) { tab += 1; selected = emptySet() }
+                        }
+                    ) { _, drag -> dx += drag }
+                }
+        ) {
             // 「发现」有自己的标题栏，这里再画一条就会出现「TG漫画 / 31 册」叠在「发现」上面的双层标题
             if (tab != 2) {
                 GlassTopBar(
                     title = if (tab == 3) "设置" else "TG漫画",
                     subtitle = if (tab == 3) "个性化 · 来源 · 数据与备份"
                     else "${lib.comics.size} 册 · ${lib.links.size} 条链接",
-                    trailing = {}
+                    trailing = {
+                        if (tab == 0) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                GlassIconButton(Glyph.TUNE, size = 38.dp, onClick = { showOrganize = true })
+                                Spacer(Modifier.width(6.dp))
+                                GlassIconButton(Glyph.HISTORY, size = 38.dp, onClick = { showLinks = true })
+                            }
+                        }
+                    }
                 )
             }
 
@@ -395,6 +425,16 @@ fun ShelfScreen(
             }
         }
 
+        if (selectMode && selected.size >= 2) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 208.dp)
+            ) {
+                GlassPill("合并所选 ${selected.size} 册", selected = true) { mergeIds = selected }
+            }
+        }
+
         if (selectMode) {
             SelectionBar(
                 count = selected.size,
@@ -434,6 +474,41 @@ fun ShelfScreen(
             }
         }
 
+        if (toast.isNotBlank()) {
+            LaunchedEffect(toast) {
+                kotlinx.coroutines.delay(4200)
+                toast = ""
+            }
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 170.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Glass.palette.panelTop)
+                    .padding(horizontal = 14.dp, vertical = 9.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(toast, fontSize = 11.5.sp, color = Glass.Text)
+                    if (undoHint) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "撤销",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Glass.Accent,
+                            modifier = Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                undoHint = false
+                                toast = if (lib.undo()) "已撤销合并" else "没有可撤销的操作"
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
         GlassBottomNav(
             items = listOf(
                 NavItem(Glyph.SHELF, "书架"),
@@ -455,6 +530,37 @@ fun ShelfScreen(
         )
     }
 
+
+    // 书架页自己的工具：整理 / 合并预览 / 链接记录
+    if (showOrganize) {
+        OrganizeSheet(lib = lib, onClose = { showOrganize = false }, onToast = { toast = it })
+    }
+    mergeIds?.let { ids ->
+        ManualMergeSheet(
+            lib = lib,
+            ids = ids,
+            onClose = { mergeIds = null },
+            onToast = { msg ->
+                toast = msg
+                if (msg.startsWith("已合并")) undoHint = true
+            }
+        )
+    }
+    if (showLinks) {
+        LinksSheet(
+            lib = lib,
+            onImport = { urls ->
+                showLinks = false
+                onImport(urls)
+            },
+            onRetry = { url ->
+                showLinks = false
+                onImport(listOf(url))
+            },
+            onRemove = { url -> lib.removeLink(url) },
+            onClose = { showLinks = false }
+        )
+    }
 
     // 单册菜单
     menuFor?.let { c ->
