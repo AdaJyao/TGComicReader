@@ -118,6 +118,7 @@ fun SettingsScreen(
     var autoUpdate by remember { mutableStateOf(prefs.autoUpdate) }
     var davReady by remember { mutableStateOf(prefs.webdavReady) }
     var davBusy by remember { mutableStateOf("") }
+    var organizing by remember { mutableStateOf(false) }
 
     androidx.activity.compose.BackHandler(enabled = page != SPage.ROOT) { page = SPage.ROOT }
 
@@ -313,6 +314,35 @@ fun SettingsScreen(
                                 pages = totalPages,
                                 links = lib.links.size,
                                 cached = cachedTotal
+                            )
+                        }
+                        item { SectionHeader("整理") }
+                        item {
+                            SettingRow(
+                                "整理书架",
+                                value = if (organizing) "整理中…" else "${lib.comics.size} 册",
+                                subtitle = "同一系列的多个话并成一册；重复收录的只留页数最多的那本",
+                                onClick = {
+                                    if (!organizing) {
+                                        organizing = true
+                                        scope.launch {
+                                            val r = withContext(Dispatchers.IO) { runCatching { lib.organize() } }
+                                            organizing = false
+                                            r.fold(
+                                                onSuccess = { rep ->
+                                                    dialog = SDialog.Info(
+                                                        "整理完成",
+                                                        "整理前 ${rep.before} 册 → 现在 ${rep.after} 册" + "\n" +
+                                                            "合并同系列 ${rep.seriesMerged} 册，清理重复 ${rep.dupsRemoved} 册"
+                                                    )
+                                                },
+                                                onFailure = { e ->
+                                                    dialog = SDialog.Info("整理失败", e.message ?: "未知错误")
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
                             )
                         }
                         item { SectionHeader("备份") }

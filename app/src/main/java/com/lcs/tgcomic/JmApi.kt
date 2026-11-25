@@ -115,7 +115,13 @@ object JmApi {
             val title = H1.find(html)?.groupValues?.get(1)?.let { unescape(it) }?.trim().orEmpty()
                 .ifBlank { "18comic-$aid" }
             val author = AUTHOR.find(html)?.groupValues?.get(1)?.let { unescape(it) }?.trim().orEmpty()
-            val chapters = PHOTO_ID_IN_PAGE.findAll(html).map { it.groupValues[1] }.distinct().toList()
+            // 相册页的章节列表通常是「最新在前」，按 cid 升序还原阅读顺序，
+            // 否则合并成多话之后页序会整个反掉
+            val chapters = PHOTO_ID_IN_PAGE.findAll(html)
+                .map { it.groupValues[1] }
+                .distinct()
+                .sortedBy { it.toLongOrNull() ?: 0L }
+                .toList()
             val pages = ArrayList<String>()
             val list = chapters.ifEmpty { listOf(aid) }
             list.forEachIndexed { i, cid ->

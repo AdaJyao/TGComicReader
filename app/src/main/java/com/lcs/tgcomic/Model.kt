@@ -376,39 +376,94 @@ class Library(private val ctx: Context) {
     }
 
     /**
-     * 多维查重：命中任意一条就认为「已经收过」。
-     *   1. 同一来源页（host + 路径数字 id 相同，忽略 query）
-     *   2. 页面集合重合度 ≥ 0.9（同一次抓取换了域名/参数）
-     *   3. 页数相同 + 封面文件名相同
-     *   4. 页数相同 + 第一张图相同
+     * 多维查重（严格版）。telegra.ph 这类文章页经常共用第一张图/同一套模板，
+     * 所以「同首图」不再单独算重复，必须再叠一层「页面有实质重合」。
+     *
+     *   1. 同一来源页（host + /album/123、/g/123、/photo/123 这类 id 相同）
+     *   2. 页数相同 + 页面重合度 ≥ 90%（且至少 3 页）
+     *   3. 页数相同 + 首图相同 + 页面重合度 ≥ 50%
      */
     fun findDuplicate(title: String, url: String, pages: List<String>, cover: String): Comic? {
         val urlKey = canonicalUrlKey(url)
         comics.firstOrNull { canonicalUrlKey(it.sourceUrl) == urlKey }?.let { return it }
 
+        if (pages.size < 3) return null
         val incoming = pages.map { it.substringBefore('?') }.toSet()
-        if (incoming.isNotEmpty()) {
-            comics.firstOrNull { c ->
-                if (c.pages.isEmpty() || c.pages.size != incoming.size) return@firstOrNull false
-                val mine = c.pages.map { it.substringBefore('?') }.toSet()
-                val inter = mine.count { it in incoming }
-                inter.toDouble() / incoming.size >= 0.9
-            }?.let { return it }
-        }
+        comics.firstOrNull { c ->
+            if (c.pages.size != incoming.size) return@firstOrNull false
+            val mine = c.pages.map { it.substringBefore('?') }.toSet()
+            val inter = mine.count { it in incoming }
+            inter.toDouble() / incoming.size >= 0.9
+        }?.let { return it }
 
-        val coverName = cover.substringAfterLast('/').substringBefore('?')
-        if (coverName.isNotEmpty() && pages.isNotEmpty()) {
-            comics.firstOrNull { c ->
-                c.pages.size == pages.size &&
-                    c.cover.substringAfterLast('/').substringBefore('?') == coverName
-            }?.let { return it }
-        }
-
-        val first = pages.firstOrNull()?.substringBefore('?')
-        if (first != null) {
-            comics.firstOrNull { c -> c.pages.firstOrNull()?.substringBefore('?') == first }?.let { return it }
-        }
+        val first = pages.firstOrNull()?.substringBefore('?') ?: return null
+        comics.firstOrNull { c ->
+            if (c.pages.size != incoming.size) return@firstOrNull false
+            val theirFirst = c.pages.firstOrNull()?.substringBefore('?') ?: return@firstOrNull false
+            if (theirFirst != first) return@firstOrNull false
+            val mine = c.pages.map { it.substringBefore('?') }.toSet()
+            val inter = mine.count { it in incoming }
+            inter.toDouble() / incoming.size >= 0.5
+        }?.let { return it }
         return null
+    }
+
+    /** 导入前先问一句：这册是不已经收过（用于弹「保留哪个」的对话框） */
+    fun findConflict(title: String, url: String, pages: List<String>, cover: String): Comic? =
+        findDuplicate(title, url, pages, cover)
+
+    /** 用户选择「合并进原来那册」 */
+    fun mergeInto(existingId: String, title: String, pages: List<String>): Int {
+        val c = comics.firstOrNull { it.id == existingId } ?: return 0
+        val added = mergePages(c, pages, sameChapter = false, chapterName = title)
+        save()
+        return added
+    }
+
+    /** 用户选择「用新导入替换旧的」 */
+    fun replaceComic(existingId: String, title: String, url: String, pages: List<String>, author: String, cover: String): Comic {
+        val old = comics.firstOrNull { it.id == existingId }
+        val idx = if (old != null) comics.indexOf(old) else 0
+        if (old != null) {
+            dropCache(old.id)
+            comics.removeAll { it.id == existingId }
+        }
+        val key = seriesKeyOf(title, url)
+        val c = Comic(
+            id = comicIdOf(url),
+            title = title,
+            sourceUrl = url,
+            pages = mutableStateListOf<String>().also { it.addAll(pages) },
+            author = author,
+            cover = cover,
+            seriesKey = key,
+            chapterMarks = mutableStateListOf(0),
+            chapterNames = mutableStateListOf(title)
+        )
+        comics.add(idx.coerceIn(0, comics.size), c)
+        tick.value++
+        save()
+        return c
+    }
+
+    /** 用户选择「两个都留」 */
+    fun addComic(title: String, url: String, pages: List<String>, author: String, cover: String): Comic {
+        val key = seriesKeyOf(title, url)
+        val c = Comic(
+            id = comicIdOf(url) + "-" + (System.currentTimeMillis() % 100000),
+            title = title,
+            sourceUrl = url,
+            pages = mutableStateListOf<String>().also { it.addAll(pages) },
+            author = author,
+            cover = cover,
+            seriesKey = key,
+            chapterMarks = mutableStateListOf(0),
+            chapterNames = mutableStateListOf(title)
+        )
+        comics.add(0, c)
+        tick.value++
+        save()
+        return c
     }
 
     private fun canonicalUrlKey(url: String): String {
@@ -490,12 +545,52 @@ class Library(private val ctx: Context) {
         return fresh.size
     }
 
-    /** 老数据迁移：补 seriesKey，并把同系列的多册并成一册（只在 load 后跑一次） */
-    fun rebuildSeries() {
+    data class OrganizeReport(
+        val before: Int,
+        val after: Int,
+        val seriesMerged: Int,
+        val dupsRemoved: Int
+    )
+
+    /**
+     * 整理书架：
+     *   · 重算 seriesKey，把同一系列的多册并成一册（保留章节起点）
+     *   · removeDuplicates=true 时再按多维规则清掉重复册（保留页数多的那本）
+     */
+    fun organize(removeDuplicates: Boolean = true): OrganizeReport {
+        val before = comics.size
         // 每次都重算：规则改了（比如新增「剥掉纯数字尾巴」）老数据才会跟着归并
         comics.forEach { c -> c.seriesKey = seriesKeyOf(c.title, c.sourceUrl) }
-        val groups = comics.filter { it.seriesKey.isNotEmpty() }.groupBy { it.seriesKey }
+
+        var dups = 0
+        if (removeDuplicates) {
+            var i = 0
+            while (i < comics.size) {
+                var j = i + 1
+                var restarted = false
+                while (j < comics.size) {
+                    val a = comics[i]
+                    val b = comics[j]
+                    if (isDuplicatePair(a, b)) {
+                        val keep = if (a.pages.size >= b.pages.size) a else b
+                        val drop = if (keep.id == a.id) b else a
+                        runCatching { mergePages(keep, drop.pages, sameChapter = true) }
+                        if (keep.cover.isBlank()) keep.cover = drop.cover
+                        if (keep.author.isBlank()) keep.author = drop.author
+                        dropCache(drop.id)
+                        comics.remove(drop)
+                        dups++
+                        restarted = true
+                        break
+                    }
+                    j++
+                }
+                if (!restarted) i++
+            }
+        }
+
         var merged = 0
+        val groups = comics.filter { it.seriesKey.isNotEmpty() }.groupBy { it.seriesKey }
         groups.forEach { (_, list) ->
             if (list.size < 2) return@forEach
             val keep = list.minByOrNull { it.addedAt } ?: return@forEach
@@ -505,21 +600,48 @@ class Library(private val ctx: Context) {
                 }
                 if (keep.cover.isBlank()) keep.cover = other.cover
                 if (keep.author.isBlank()) keep.author = other.author
-                File(comicDir, other.id).deleteRecursively()
+                dropCache(other.id)
                 comics.removeAll { it.id == other.id }
                 merged++
             }
         }
-        if (merged > 0) {
-            tick.value++
-            save()
-        }
+
+        tick.value++
+        if (merged > 0 || dups > 0) save()
+        return OrganizeReport(before, comics.size, merged, dups)
+    }
+
+    /** 启动时的轻量版本：只归并同系列，不删重复（避免静默删书） */
+    fun rebuildSeries() {
+        val r = organize(removeDuplicates = false)
+        if (r.seriesMerged > 0) save()
+    }
+
+    /** 两册是否重复（与导入时的判定保持一致） */
+    private fun isDuplicatePair(a: Comic, b: Comic): Boolean {
+        if (a.id == b.id) return false
+        val ka = canonicalUrlKey(a.sourceUrl)
+        val kb = canonicalUrlKey(b.sourceUrl)
+        if (ka.isNotBlank() && ka == kb) return true
+
+        val pa = a.pages.map { it.substringBefore('?') }
+        val pb = b.pages.map { it.substringBefore('?') }
+        if (pa.size < 3 || pa.size != pb.size) return false
+        val sa = pa.toSet()
+        val inter = pb.count { it in sa }
+        if (inter.toDouble() / pa.size >= 0.9) return true
+        if (pa.first() == pb.first() && inter.toDouble() / pa.size >= 0.5) return true
+        return false
+    }
+
+    private fun dropCache(id: String) {
+        runCatching { File(comicDir, id).deleteRecursively() }
+        runCatching { File(File(ctx.filesDir, "covers"), "$id.jpg").delete() }
     }
 
     fun removeComic(id: String) {
         comics.removeAll { it.id == id }
-        File(comicDir, id).deleteRecursively()
-        runCatching { File(File(ctx.filesDir, "covers"), "$id.jpg").delete() }
+        dropCache(id)
         tick.value++
     }
 

@@ -11,6 +11,9 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -80,6 +83,7 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.runtime.SideEffect {
                     applySystemBars(pal.dark)
                 }
+                Box(Modifier.fillMaxSize()) {
                 AppRoot(
                     lib = lib,
                     prefs = prefs,
@@ -157,6 +161,23 @@ class MainActivity : ComponentActivity() {
                     onUpdateDismiss = { updateUi = UpdateUi() },
                     onClearMessage = { message = "" }
                 )
+
+                // 导入冲突弹窗：叠在整页之上（同层 Box，不然会被页面挤到屏幕外）
+                conflict?.let { c ->
+                    ImportConflictDialog(
+                        newTitle = c.incoming.title,
+                        newUrl = c.incoming.url,
+                        newPages = c.incoming.images.size,
+                        oldTitle = c.existing.title,
+                        oldUrl = c.existing.sourceUrl,
+                        oldPages = c.existing.pages.size,
+                        onKeepOld = { resolveConflict("old") },
+                        onMerge = { resolveConflict("merge") },
+                        onReplace = { resolveConflict("replace") },
+                        onKeepBoth = { resolveConflict("both") }
+                    )
+                }
+                }
             }
         }
 
@@ -468,7 +489,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 导入时发现的重复：让用户选保留哪个 */
+    private var conflict by mutableStateOf<ImportConflict?>(null)
+
+    private data class ImportConflict(
+        val incoming: Parsed,
+        val existing: Comic,
+        val rest: List<Parsed>
+    )
+
     private fun confirmImport(items: List<Parsed>) {
+        // 先做一次冲突检测：和书架里已有的重复就先问用户，别自作主张
+        items.forEachIndexed { i, p ->
+            val ex = runCatching { lib.findConflict(p.title, p.url, p.images, p.cover) }.getOrNull()
+            if (ex != null) {
+                importState = ImportState.Idle
+                conflict = ImportConflict(p, ex, items.drop(i + 1))
+                return
+            }
+        }
         lifecycleScope.launch {
             var created = 0
             var merged = 0
@@ -493,6 +532,36 @@ class MainActivity : ComponentActivity() {
                 else -> "这些页面已在书架里"
             }
         }
+    }
+
+    /** 冲突解决后：应用用户的选择，再继续导入后面的链接 */
+    private fun resolveConflict(choice: String) {
+        val c = conflict ?: return
+        val p = c.incoming
+        when (choice) {
+            "old" -> {
+                lib.addLink(p.url, p.title, "dup", "保留了书架原有的那册")
+                message = "已保留原册，跳过这一条"
+            }
+            "merge" -> {
+                val n = lib.mergeInto(c.existing.id, p.title, p.images)
+                lib.addLink(p.url, p.title, "merged", "合并 $n 页进原册")
+                message = if (n > 0) "已合并 $n 页进原册" else "页面完全相同，没有新增"
+            }
+            "replace" -> {
+                lib.replaceComic(c.existing.id, p.title, p.url, p.images, p.author, p.cover)
+                lib.addLink(p.url, p.title, "ok", "替换了原有那册")
+                message = "已用新导入的替换原册"
+            }
+            else -> {
+                lib.addComic(p.title, p.url, p.images, p.author, p.cover)
+                lib.addLink(p.url, p.title, "ok", "作为新册保留")
+                message = "已作为新的一册加入书架"
+            }
+        }
+        saveAsync()
+        conflict = null
+        if (c.rest.isNotEmpty()) confirmImport(c.rest)
     }
 
     // ---------------- 导出 ----------------

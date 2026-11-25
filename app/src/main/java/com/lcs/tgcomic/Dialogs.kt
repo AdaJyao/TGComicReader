@@ -868,3 +868,78 @@ private fun DavField(
         }
     }
 }
+
+/**
+ * 导入时发现「书架里已有同一册」——把两边都列出来，让用户自己决定保留哪个。
+ * 自动判重很容易一刀切（telegra.ph 的文章常常共用首图/模板），所以这里不替用户拍板。
+ */
+@Composable
+fun ImportConflictDialog(
+    newTitle: String,
+    newUrl: String,
+    newPages: Int,
+    oldTitle: String,
+    oldUrl: String,
+    oldPages: Int,
+    onKeepOld: () -> Unit,
+    onMerge: () -> Unit,
+    onReplace: () -> Unit,
+    onKeepBoth: () -> Unit
+) {
+    GlassDialog(onDismiss = onKeepOld) {
+        Text("发现重复", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "书架里已经有一册和这次导入的很像，保留哪个由你决定",
+            fontSize = 11.sp,
+            color = Glass.TextDim
+        )
+        Spacer(Modifier.height(12.dp))
+
+        ConflictBlock("书架里已有的", oldTitle, oldUrl, oldPages, Glass.TextDim)
+        Spacer(Modifier.height(8.dp))
+        ConflictBlock("这次要导入的", newTitle, newUrl, newPages, Glass.Accent)
+
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GlassPill("保留原册", modifier = Modifier.weight(1f).height(40.dp), onClick = onKeepOld)
+            GlassPill("合并两册", selected = true, modifier = Modifier.weight(1f).height(40.dp), onClick = onMerge)
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GlassPill("用新的替换", modifier = Modifier.weight(1f).height(40.dp), onClick = onReplace)
+            GlassPill("两个都留", modifier = Modifier.weight(1f).height(40.dp), onClick = onKeepBoth)
+        }
+    }
+}
+
+@Composable
+private fun ConflictBlock(tag: String, title: String, url: String, pages: Int, color: androidx.compose.ui.graphics.Color) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Glass.palette.inputField)
+            .padding(horizontal = 12.dp, vertical = 9.dp)
+    ) {
+        Text(tag, fontSize = 10.sp, color = Glass.TextTertiary)
+        Spacer(Modifier.height(3.dp))
+        Text(
+            title,
+            fontSize = 12.5.sp,
+            lineHeight = 17.sp,
+            color = Glass.Text,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(3.dp))
+        Text("$pages 页", fontSize = 10.5.sp, color = color)
+        Text(
+            url,
+            fontSize = 9.5.sp,
+            color = Glass.TextTertiary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
