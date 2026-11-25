@@ -135,6 +135,16 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("keepOn", true)
         set(v) = sp.edit().putBoolean("keepOn", v).apply()
 
+    /** 阅读时提前解析/预载后面几页（0 = 关闭） */
+    var prefetchAhead: Int
+        get() = sp.getInt("prefetchAhead", 4).coerceIn(0, 8)
+        set(v) = sp.edit().putInt("prefetchAhead", v.coerceIn(0, 8)).apply()
+
+    /** 音量键翻页：音量+ 上一页、音量- 下一页 */
+    var volumeKeys: Boolean
+        get() = sp.getBoolean("volumeKeys", false)
+        set(v) = sp.edit().putBoolean("volumeKeys", v).apply()
+
     /** ExHentai / E-Hentai 登录 Cookie（ipb_member_id=...; ipb_pass_hash=...; ignorant=1） */
     var ehCookie: String
         get() = sp.getString("ehCookie", "") ?: ""

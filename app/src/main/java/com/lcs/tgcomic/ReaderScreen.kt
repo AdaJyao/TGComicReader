@@ -49,6 +49,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -119,10 +126,11 @@ fun ReaderScreen(
 
     LaunchedEffect(current) { onProgress(current) }
 
-    LaunchedEffect(comic.id, current) {
+    LaunchedEffect(comic.id, current, prefs.prefetchAhead) {
+        val ahead = prefs.prefetchAhead
         var done = 0
         var i = current
-        while (done < PREFETCH_AHEAD && i < comic.pages.size) {
+        while (ahead > 0 && done < ahead && i < comic.pages.size) {
             val u = comic.pages[i]
             if (isPendingPage(u) && !pageDirs.containsKey(u)) {
                 val direct = runCatching { PageResolver.direct(u, prefs.ehCookie) }.getOrNull()
@@ -142,7 +150,30 @@ fun ReaderScreen(
         }
     }
 
-    Box(Modifier.fillMaxSize().background(bg.color)) {
+    val keyFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { keyFocus.requestFocus() } }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(bg.color)
+            .focusRequester(keyFocus)
+            .focusable()
+            .onKeyEvent { e ->
+                if (!prefs.volumeKeys || e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (e.key) {
+                    androidx.compose.ui.input.key.Key.VolumeDown -> {
+                        if (current < last) goto(current + 1)
+                        true
+                    }
+                    androidx.compose.ui.input.key.Key.VolumeUp -> {
+                        if (current > 0) goto(current - 1)
+                        true
+                    }
+                    else -> false
+                }
+            }
+    ) {
 
         if (mode == ReaderMode.VERTICAL) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
