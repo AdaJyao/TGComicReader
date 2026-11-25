@@ -19,6 +19,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -107,7 +108,6 @@ fun ShelfScreen(
     var confirmDelete by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showClearLinks by remember { mutableStateOf(false) }
     var showPaste by remember { mutableStateOf(false) }
-    var showExportMenu by remember { mutableStateOf(false) }
 
     val selectMode = selected.isNotEmpty()
     val ctx = LocalContext.current
@@ -159,8 +159,11 @@ fun ShelfScreen(
     @Suppress("UNUSED_VARIABLE")
     val tick = lib.tick.value
     // 排序/过滤只在书架、排序、搜索词变化时重算：滚动时不再每帧排一遍
-    val shown = remember(tick, sort, favFirst, query) {
-        val all = lib.sortComics(sort, favFirst)
+    // tab==1 是「收藏」页：同一套网格，只留收藏的册子
+    val shown = remember(tick, sort, favFirst, query, tab) {
+        val all = lib.sortComics(sort, favFirst).let { list ->
+            if (tab == 1) list.filter { it.favorite } else list
+        }
         if (query.isBlank()) all else all.filter {
             it.title.contains(query, ignoreCase = true) || it.author.contains(query, ignoreCase = true)
         }
@@ -175,12 +178,10 @@ fun ShelfScreen(
             GlassTopBar(
                 title = "TG漫画",
                 subtitle = "${lib.comics.size} 册 · ${lib.links.size} 条链接",
-                trailing = {
-                    GlassIconButton(Glyph.MORE_DOTS, onClick = { showExportMenu = true })
-                }
+                trailing = {}
             )
 
-            if (tab == 0) {
+            if (tab == 0 || tab == 1) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -242,10 +243,11 @@ fun ShelfScreen(
                 }
                 Spacer(Modifier.height(8.dp))
 
-                if (lib.comics.isEmpty()) {
+                if (lib.comics.isEmpty() || (tab == 1 && shown.isEmpty() && query.isBlank())) {
                     EmptyState(
-                        title = "书架还是空的",
-                        detail = "复制 telegra.ph 链接、t.me 消息链接或图片直链，\n切回这里会自动识别；也可以在别的 App 里分享给 TG漫画。",
+                        title = if (tab == 1) "还没有收藏的册子" else "书架还是空的",
+                        detail = if (tab == 1) "在书架里长按封面可以加入收藏，收藏的册子集中显示在这里。"
+                        else "复制 telegra.ph 链接、t.me 消息链接或图片直链，\n切回这里会自动识别；也可以在别的 App 里分享给 TG漫画。",
                         accent = Glass.Accent,
                         modifier = Modifier.padding(bottom = 90.dp)
                     )
@@ -314,12 +316,10 @@ fun ShelfScreen(
                         }
                     }
                 }
-            } else if (tab == 1) {
-                RecordList(
-                    lib = lib,
-                    onRetry = onRetryLink,
-                    onRemove = onRemoveLink,
-                    onClear = { showClearLinks = true },
+            } else if (tab == 2) {
+                DiscoverScreen(
+                    prefs = prefs,
+                    onImport = onImport,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -354,7 +354,8 @@ fun ShelfScreen(
                         lib.invalidateCacheCount(id)
                     },
                     onClearLinks = { showClearLinks = true },
-                    onOpenRecords = { tab = 1 },
+                    onRetryLink = onRetryLink,
+                    onRemoveLink = onRemoveLink,
                     onCheckUpdates = onCheckUpdates,
                     onCheckAppUpdate = onCheckAppUpdate,
                     onExport = onExport,
@@ -389,85 +390,46 @@ fun ShelfScreen(
             )
         }
 
+        // 导入：从底栏挪到右下角悬浮按钮（导入是动作，不该占一个“目的地”位）
+        if (!selectMode && (tab == 0 || tab == 1)) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = 104.dp)
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Glass.Accent)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showPaste = true },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("+", fontSize = 26.sp, color = Color(0xFF06222B), fontWeight = FontWeight.Bold)
+            }
+        }
+
         GlassBottomNav(
             items = listOf(
                 NavItem(Glyph.SHELF, "书架"),
-                NavItem(Glyph.HISTORY, "记录"),
-                NavItem(Glyph.ADD, "导入"),
+                NavItem(Glyph.STAR, "收藏"),
+                NavItem(Glyph.SEARCH, "发现"),
                 NavItem(Glyph.TUNE, "设置")
             ),
             selected = when (tab) {
                 0 -> 0
                 1 -> 1
+                2 -> 2
                 else -> 3
             },
             modifier = Modifier.align(Alignment.BottomCenter),
             onSelect = { i ->
-                when (i) {
-                    0 -> {
-                        tab = 0
-                        selected = emptySet()
-                    }
-                    1 -> {
-                        tab = 1
-                        selected = emptySet()
-                    }
-                    2 -> showPaste = true
-                    else -> {
-                        tab = 2
-                        selected = emptySet()
-                    }
-                }
+                tab = i
+                selected = emptySet()
             }
         )
     }
 
-    // 顶栏更多菜单
-    GlassSheet(
-        visible = showExportMenu,
-        onDismiss = { showExportMenu = false },
-        title = "外观与导出",
-        subtitle = "主题 / 导出 / 视图"
-    ) { close ->
-
-        GlassMenuItem("检查更新（重新抓取全部来源）") {
-            close()
-            onCheckUpdates()
-        }
-        GlassMenuItem("检查软件更新") {
-            close()
-            onCheckAppUpdate()
-        }
-        GlassMenuDivider()
-        GlassMenuItem("${ExportKind.JSON.short} · 书架 JSON") {
-            close()
-            onExport(ExportKind.JSON, null)
-        }
-        GlassMenuItem("${ExportKind.TXT.short} · 含全部图片直链") {
-            close()
-            onExport(ExportKind.TXT, null)
-        }
-        GlassMenuItem("${ExportKind.URLS.short} · 只要来源链接") {
-            close()
-            onExport(ExportKind.URLS, null)
-        }
-        GlassMenuDivider()
-        GlassMenuItem("网格列数：${if (columns == 2) "2 列" else "3 列"}") {
-            columns = if (columns == 2) 3 else 2
-            prefs.columns = columns
-        }
-        GlassMenuItem("收藏优先：${if (favFirst) "开" else "关"}") {
-            favFirst = !favFirst
-            prefs.favoritesFirst = favFirst
-        }
-        val cacheTargets = lib.comics.filter { lib.cachedPageCount(it.id) > 0 }
-        if (cacheTargets.isNotEmpty()) {
-            GlassMenuItem("清空全部本地缓存（${cacheTargets.size} 册）") {
-                close()
-                cacheTargets.forEach(onClearCache)
-            }
-        }
-    }
 
     // 单册菜单
     menuFor?.let { c ->

@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.24 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.25 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -36,6 +36,7 @@
 | [v2.22](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.22) | WebDAV 备份、书架滚动优化、弹窗圆角、修恢复不落盘 |
 | [v2.23](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.23) | **改发 release 包（AOT 编译）**，修掉书架滚动卡顿的真因 |
 | [v2.24](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.24) | 设置页重构：一级分组 → 二级设置，每项都能真正修改 |
+| [v2.25](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.25) | 底栏重排（书架/收藏/发现/设置）、新增发现页、9 套主题、右上角菜单并入设置 |
 
 ## 构建
 
@@ -949,3 +950,37 @@ sideload 的 release 包安装时是 `verify` 状态，ART 会在使用中把热
 
 `SettingsScreen` 里「内容列」和「弹窗」原本是同级子节点，会被父布局当成两行竖排，
 导致**弹窗被排到屏幕外**（点了没反应）——现在用 `Box` 叠放。
+
+---
+
+## 2.25 底栏重排 + 发现页 + 9 套主题 + 右上角菜单并入设置
+
+### 一、底栏四个按钮重排
+
+| 之前 | 现在 |
+|---|---|
+| 书架 / 记录 / 导入 / 设置 | **书架 / 收藏 / 发现 / 设置** |
+
+- **导入**是动作不是页面 → 改成右下角悬浮 **+** 按钮（书架和收藏页都有）
+- **记录**并入设置：设置 → 数据与备份 → 链接记录（可重试失败项、可清空）
+- 右上角「⋯」菜单**整个删掉**，里面的功能全部搬进设置：
+  重抓来源更新、检查软件更新、导出 JSON / TXT / **链接列表**（新增）、网格列数、收藏优先、清空缓存
+
+### 二、两个新页面
+
+**收藏页**（底栏第 2 个）
+只列收藏的册子，共用书架的搜索、排序、多选、批量缓存、长按菜单。
+
+**发现页**（底栏第 3 个）
+不用自己找链接，直接浏览站点内容，点「加入」就导入：
+
+| 来源 | 说明 |
+|---|---|
+| 紳士漫畫最新 | wnacg 最新更新列表，一次 24 册 |
+| E-Hentai 首页 | 首页推荐（需要能访问 e-hentai） |
+| 搜索 E-Hentai | 关键词搜索，回车即搜 |
+
+### 三、主题从 4 套扩到 9 套
+
+墨蓝 / 纯黑 / **靛紫** / **森绿** / **落日** / **玫瑰**（深色）+ 浅色 / **沙金**（浅色）+ 跟随系统。
+外观页每行 4 个色卡，点一下整套 UI 立即换色。

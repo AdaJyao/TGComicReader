@@ -60,6 +60,7 @@ private enum class SPage(val title: String) {
     SOURCE("来源"),
     DATA("数据"),
     CACHE("缓存管理"),
+    RECORDS("链接记录"),
     UPDATE("更新"),
     ABOUT("关于")
 }
@@ -92,7 +93,8 @@ fun SettingsScreen(
     onClearAllCache: () -> Unit,
     onClearOneCache: (String) -> Unit,
     onClearLinks: () -> Unit,
-    onOpenRecords: () -> Unit,
+    onRetryLink: (String) -> Unit,
+    onRemoveLink: (String) -> Unit,
     onCheckUpdates: () -> Unit,
     onCheckAppUpdate: () -> Unit,
     onExport: (ExportKind, Set<String>?) -> Unit,
@@ -152,12 +154,12 @@ fun SettingsScreen(
                 when (page) {
                     SPage.LOOK -> {
                         item { SectionHeader("主题") }
-                        item {
+                        items(AppTheme.entries.chunked(4)) { row ->
                             Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+                                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                AppTheme.entries.forEach { t ->
+                                row.forEach { t ->
                                     ThemeSwatch(t, selected = theme == t) { onTheme(t) }
                                 }
                             }
@@ -165,7 +167,7 @@ fun SettingsScreen(
                         item {
                             SettingRow(
                                 "主题说明",
-                                subtitle = "跟随系统时按系统的深/浅色自动切换；其余三种是固定配色",
+                                subtitle = "跟随系统：按系统的深/浅色自动切换。其余都是固定配色（5 种深色 + 2 种浅色）。",
                                 onClick = null
                             )
                         }
@@ -330,6 +332,13 @@ fun SettingsScreen(
                         }
                         item {
                             SettingRow(
+                                "导出链接列表",
+                                subtitle = "只要来源链接，一行一条，方便贴到别处",
+                                onClick = { onExport(ExportKind.URLS, null) }
+                            )
+                        }
+                        item {
+                            SettingRow(
                                 "从本地备份恢复",
                                 subtitle = "选一个 tgcomic-*.json，按来源链接去重合并",
                                 onClick = onImportBackup
@@ -428,8 +437,8 @@ fun SettingsScreen(
                             SettingRow(
                                 "链接记录",
                                 value = "${lib.links.size} 条",
-                                subtitle = "点开看导入记录，可重试失败项",
-                                onClick = onOpenRecords
+                                subtitle = "看导入过的链接，可重试失败项或删除记录",
+                                onClick = { page = SPage.RECORDS }
                             )
                         }
                         item {
@@ -460,6 +469,40 @@ fun SettingsScreen(
                                 value = if (have > 0) "$have / ${c.pages.size} 页" else "未缓存",
                                 subtitle = if (have > 0) "点右侧图标清除这一册的缓存" else null
                             )
+                        }
+                    }
+
+                    SPage.RECORDS -> {
+                        if (lib.links.isEmpty()) {
+                            item {
+                                SettingRow(
+                                    "还没有记录",
+                                    subtitle = "导入过的链接会出现在这里，失败的可重试"
+                                )
+                            }
+                        } else {
+                            item {
+                                SettingRow(
+                                    "全部清空",
+                                    value = "${lib.links.size} 条",
+                                    danger = true,
+                                    onClick = onClearLinks
+                                )
+                            }
+                            items(lib.links, key = { it.url + it.at }) { l ->
+                                SettingRow(
+                                    title = l.title.ifBlank { l.url },
+                                    value = when (l.status) {
+                                        "ok" -> "已导入"
+                                        "merged" -> "已合并"
+                                        "dup" -> "重复"
+                                        "fail" -> "失败"
+                                        else -> l.status
+                                    },
+                                    subtitle = (l.detail.ifBlank { l.url }).take(120),
+                                    onClick = { onRetryLink(l.url) }
+                                )
+                            }
                         }
                     }
 

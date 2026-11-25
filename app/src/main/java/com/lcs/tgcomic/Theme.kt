@@ -19,7 +19,12 @@ import androidx.compose.ui.unit.sp
 enum class AppTheme(val label: String, val dark: Boolean) {
     AURORA("墨蓝", true),
     OLED("纯黑", true),
+    VIOLET("靛紫", true),
+    FOREST("森绿", true),
+    AMBER("落日", true),
+    ROSE("玫瑰", true),
     PAPER("浅色", false),
+    SAND("沙金", false),
     SYSTEM("跟随系统", true)
 }
 
@@ -182,10 +187,86 @@ val PaperPalette = GlassPalette(
     glassShade = 0f
 )
 
+// ── 其余深色主题：沿用墨蓝的层级，只换强调色与背景色温 ──
+val VioletPalette = InkPalette.copy(
+    accent = Color(0xFF9B7BF7),
+    accent2 = Color(0xFF6FA8F5),
+    accent3 = Color(0xFFD982C8),
+    bg = Color(0xFF0C0A14),
+    body = Color(0xFF14121C),
+    surface = Color(0xFF16131F),
+    surfaceVariant = Color(0xFF1D1928),
+    bgTop = Color(0xFF0C0A14),
+    bgMid = Color(0xFF0C0A14),
+    bgBottom = Color(0xFF0C0A14),
+    veil = Color(0xFF0C0A14)
+)
+
+val ForestPalette = InkPalette.copy(
+    accent = Color(0xFF43C08D),
+    accent2 = Color(0xFF7FD3A8),
+    accent3 = Color(0xFFC8B65A),
+    bg = Color(0xFF08110D),
+    body = Color(0xFF0E1713),
+    surface = Color(0xFF101A15),
+    surfaceVariant = Color(0xFF16211B),
+    bgTop = Color(0xFF08110D),
+    bgMid = Color(0xFF08110D),
+    bgBottom = Color(0xFF08110D),
+    veil = Color(0xFF08110D)
+)
+
+val AmberPalette = InkPalette.copy(
+    accent = Color(0xFFE09A46),
+    accent2 = Color(0xFFE8C46A),
+    accent3 = Color(0xFFCF6E58),
+    bg = Color(0xFF110D08),
+    body = Color(0xFF191410),
+    surface = Color(0xFF1B1611),
+    surfaceVariant = Color(0xFF221C15),
+    bgTop = Color(0xFF110D08),
+    bgMid = Color(0xFF110D08),
+    bgBottom = Color(0xFF110D08),
+    veil = Color(0xFF110D08)
+)
+
+val RosePalette = InkPalette.copy(
+    accent = Color(0xFFE0709E),
+    accent2 = Color(0xFFF09C7A),
+    accent3 = Color(0xFF9C7BE0),
+    bg = Color(0xFF12090E),
+    body = Color(0xFF1A1016),
+    surface = Color(0xFF1C1118),
+    surfaceVariant = Color(0xFF24161F),
+    bgTop = Color(0xFF12090E),
+    bgMid = Color(0xFF12090E),
+    bgBottom = Color(0xFF12090E),
+    veil = Color(0xFF12090E)
+)
+
+// ── 沙金（浅色暖调）────────────────────────────────────
+val SandPalette = PaperPalette.copy(
+    accent = Color(0xFF8A6220),
+    accent2 = Color(0xFFB0733A),
+    accent3 = Color(0xFF6F7F3A),
+    bg = Color(0xFFF7F3EA),
+    surfaceVariant = Color(0xFFEFE8DA),
+    outline = Color(0xFFE4DBC8),
+    bgTop = Color(0xFFF7F3EA),
+    bgMid = Color(0xFFF7F3EA),
+    bgBottom = Color(0xFFF7F3EA),
+    veil = Color(0xFFF7F3EA)
+)
+
 fun paletteOf(theme: AppTheme, systemDark: Boolean): GlassPalette = when (theme) {
     AppTheme.AURORA -> InkPalette
     AppTheme.OLED -> OledPalette
+    AppTheme.VIOLET -> VioletPalette
+    AppTheme.FOREST -> ForestPalette
+    AppTheme.AMBER -> AmberPalette
+    AppTheme.ROSE -> RosePalette
     AppTheme.PAPER -> PaperPalette
+    AppTheme.SAND -> SandPalette
     AppTheme.SYSTEM -> if (systemDark) InkPalette else PaperPalette
 }
 
