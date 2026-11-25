@@ -389,7 +389,9 @@ object Glass {
     val R24 = RoundedCornerShape(24)
     val R22 = RoundedCornerShape(22)
     val R18 = RoundedCornerShape(18)
+    val R16 = RoundedCornerShape(16)
     val R14 = RoundedCornerShape(14)
+    val R12 = RoundedCornerShape(12)
     val R10 = RoundedCornerShape(10)
     val Pill = RoundedCornerShape(50)
 }

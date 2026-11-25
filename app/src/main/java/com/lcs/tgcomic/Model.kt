@@ -70,6 +70,36 @@ object Titles {
         """[\s\-_–—·:：,，]*(?:[\(\[（【]?\s*\d{1,4}\s*[\)\]）】]?)\s*$"""
     )
 
+    /**
+     * 页码区间尾巴：「 | 1 - 150 」「(1-150)」「1-150页」。
+     *
+     * 有些来源把一部作品按页拆成几册发（1-150 / 151-300 / 301-427），
+     * 标题只差这一截，所以：① 系列名要剥掉它，三册才归得到同一部；
+     * ② 合并时用它当排序键，起始页小的排前面。
+     */
+    private val rangeTailBracket = Regex(
+        """(?:[|｜]\s*|\s*[\(（\[【]\s*)(\d{1,5})\s*[-–~～〜]\s*(\d{1,5})\s*[\)\）\]】]?\s*$"""
+    )
+    private val rangeTailPages = Regex(
+        """(\d{1,5})\s*[-–~～〜]\s*(\d{1,5})\s*[页頁]\s*$"""
+    )
+
+    /** 标题里的页码区间：1 - 150 → 1..150；认不出来返回 null */
+    fun pageRange(raw: String): IntRange? {
+        val t = normalize(raw)
+        val m = rangeTailBracket.find(t) ?: rangeTailPages.find(t) ?: return null
+        val a = m.groupValues[1].toIntOrNull() ?: return null
+        val b = m.groupValues[2].toIntOrNull() ?: return null
+        return if (a > 0 && b >= a) a..b else null
+    }
+
+    /** 剥掉页码区间尾巴（含残留的 | - 等分隔符） */
+    private fun stripPageRange(raw: String): String {
+        if (pageRange(raw) == null) return raw
+        var t = rangeTailBracket.replace(raw, "").let { r -> if (r == raw) rangeTailPages.replace(raw, "") else r }
+        return t.trim().trimEnd('|', '｜', '-', '–', '—', ':', '：', '·', ',').trim()
+    }
+
     /** 全角 → 半角（数字/字母/空格），否则「１２」和「12」会被当成两册 */
     private fun halfWidth(raw: String): String {
         val sb = StringBuilder(raw.length)
@@ -96,9 +126,9 @@ object Titles {
         return t.trim()
     }
 
-    /** 系列名：先剥「上/中/下」，再剥章节尾巴，最后剥纯数字尾巴 */
+    /** 系列名：先剥页码区间/「上中下」，再剥章节尾巴，最后剥纯数字尾巴 */
     fun series(raw: String): String {
-        var t = raw.trim()
+        var t = stripPageRange(raw.trim())
         repeat(2) {
             val p = partTail.replace(t, "").trim()
             if (p.isNotBlank()) t = p
@@ -180,7 +210,23 @@ object Titles {
     }
 
     /** 章节排序键：序号 ×10 + 上中下；没有序号的排在组首（当作整册/第 0 话） */
-    fun chapterOrder(raw: String): Long = (chapterNo(raw) ?: 0).toLong() * 10L + chapterPart(raw)
+    fun chapterOrder(raw: String): Long {
+        // 按页拆开的册子（「| 151 - 300」）用起始页当序号：1 - 150 排第一，301 - 427 排最后
+        pageRange(raw)?.let { return it.first.toLong() * 10L + chapterPart(raw) }
+        return (chapterNo(raw) ?: 0).toLong() * 10L + chapterPart(raw)
+    }
+
+    /**
+     * 标题排序键（书架「标题」排序用）：
+     * 去掉开头的「[作者]」「(社团)」「【标签】」和标点，数字段补零到 4 位，
+     * 这样「第2话」会排在「第10话」前面，不会出现 10 在 2 前面。
+     */
+    fun titleSortKey(raw: String): String {
+        var t = normalize(raw).lowercase()
+        t = t.replace(Regex("""^[\s\(\)\[\]【】（）《》<>〈〉\-–—_.,，。:：;；!！?？'"“”‘’*~#｜|]+"""), "")
+        if (t.isBlank()) t = normalize(raw).lowercase()
+        return Regex("""\d+""").replace(t) { m -> m.value.padStart(4, '0') }
+    }
 }
 
 private fun md5(s: String): String {
@@ -1013,11 +1059,19 @@ class Library(private val ctx: Context) {
 
     fun sortComics(mode: SortMode, favoritesFirst: Boolean): List<Comic> {
         val base = when (mode) {
-            SortMode.RECENT -> comics.sortedByDescending { it.updatedAt }
-            SortMode.ADDED -> comics.sortedByDescending { it.addedAt }
-            SortMode.TITLE -> comics.sortedBy { it.title.lowercase() }
-            SortMode.PAGES -> comics.sortedByDescending { it.pages.size }
+            SortMode.RECENT -> comics.sortedWith(
+                compareByDescending<Comic> { it.updatedAt }.thenBy { Titles.titleSortKey(it.title) }
+            )
+            SortMode.ADDED -> comics.sortedWith(
+                compareByDescending<Comic> { it.addedAt }.thenBy { Titles.titleSortKey(it.title) }
+            )
+            // 标题：按「去括号前缀 + 数字补零」的键排，不然 10 会跑到 2 前面
+            SortMode.TITLE -> comics.sortedBy { Titles.titleSortKey(it.title) }
+            SortMode.PAGES -> comics.sortedWith(
+                compareByDescending<Comic> { it.pages.size }.thenBy { Titles.titleSortKey(it.title) }
+            )
         }
+        // sortedByDescending 是稳定排序：收藏的提到最前，组内保持上面排好的顺序
         return if (favoritesFirst) base.sortedByDescending { it.favorite } else base
     }
 

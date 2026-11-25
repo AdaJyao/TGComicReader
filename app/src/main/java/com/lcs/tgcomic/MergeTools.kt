@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -27,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -201,7 +203,58 @@ private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChang
     }
 }
 
-/* ---------------- 手动合并（勾选几册 → 预览 → 合并） ---------------- */
+/* ---------------- 排序（点开就是列表，不再一下一下循环点） ---------------- */
+
+private fun sortHint(m: SortMode): String = when (m) {
+    SortMode.RECENT -> "读过的排前面，按最近一次翻页时间"
+    SortMode.ADDED -> "按导入到书架的时间，新导入的在前"
+    SortMode.TITLE -> "标题 A-Z，数字按大小比（第2话 在 第10话 前面）"
+    SortMode.PAGES -> "页数多的在前，页数相同按标题"
+}
+
+@Composable
+fun SortSheet(current: SortMode, onPick: (SortMode) -> Unit, onClose: () -> Unit) {
+    GlassDialog(onDismiss = onClose) {
+        Text("排序方式", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
+        Spacer(Modifier.height(3.dp))
+        Text("书架和收藏页共用这一套；收藏页固定按最近阅读", fontSize = 10.5.sp, color = Glass.TextDim)
+        Spacer(Modifier.height(8.dp))
+        SortMode.entries.forEach { m ->
+            val on = m == current
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (on) Glass.Accent.copy(alpha = 0.12f) else Color.Transparent)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onPick(m) }
+                    .padding(horizontal = 10.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        m.label,
+                        fontSize = 13.sp,
+                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (on) Glass.Accent else Glass.Text
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(sortHint(m), fontSize = 10.sp, color = Glass.TextTertiary, lineHeight = 14.sp)
+                }
+                if (on) {
+                    Spacer(Modifier.width(8.dp))
+                    Text("✓", fontSize = 13.sp, color = Glass.Accent, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        GlassPill("关闭", modifier = Modifier.fillMaxWidth().height(42.dp), onClick = onClose)
+    }
+}
+
+/* ---------------- 手动合并（勾选几册 → 预览 → 合并 → 可撤销） ---------------- */
 
 @Composable
 fun ManualMergeSheet(lib: Library, ids: Set<String>, onClose: () -> Unit, onToast: (String) -> Unit) {
@@ -209,66 +262,135 @@ fun ManualMergeSheet(lib: Library, ids: Set<String>, onClose: () -> Unit, onToas
     if (plan == null) {
         GlassDialog(onDismiss = onClose) {
             Text("至少选两册", fontSize = 14.sp, color = Glass.Text)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
+            Text("长按封面进入多选，勾两册以上再点「合并」", fontSize = 11.sp, color = Glass.TextDim)
+            Spacer(Modifier.height(12.dp))
             GlassPill("知道了", modifier = Modifier.fillMaxWidth().height(42.dp), onClick = onClose)
         }
         return
     }
+
+    var title by remember(ids) { mutableStateOf(plan.title) }
+    var merged by remember(ids) { mutableStateOf<Comic?>(null) }
+
     GlassDialog(onDismiss = onClose) {
-        Text("合并 ${plan.chapters.size} 册", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
+        val done = merged
+        Text(
+            if (done != null) "已合并成一册" else "合并 ${plan.chapters.size} 册",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Glass.Text
+        )
         Spacer(Modifier.height(3.dp))
-        Text("按标题序号升序拼成章节，书名取系列名「${plan.title}」", fontSize = 10.5.sp, color = Glass.TextDim)
+        Text(
+            if (done != null) "不对的话可以一键还原，书架会回到合并前"
+            else "按标题里的序号升序拼成章节（有页码区间的按起始页排），下面就是合并后的样子",
+            fontSize = 10.5.sp,
+            lineHeight = 15.sp,
+            color = Glass.TextDim
+        )
 
         Spacer(Modifier.height(10.dp))
         Column(
             Modifier
                 .fillMaxWidth()
-                .heightIn(max = 300.dp)
+                .heightIn(max = 286.dp)
                 .verticalScroll(rememberScrollState())
         ) {
             Text(
-                "合并后：${plan.chapters.size} 章 · ${plan.totalPages} 页",
+                if (done != null) "${done.chapterMarks.size} 章 · ${done.pages.size} 页"
+                else "${plan.chapters.size} 章 · ${plan.totalPages} 页",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = Glass.Accent
             )
             Spacer(Modifier.height(6.dp))
             plan.chapters.forEachIndexed { i, (name, pages) ->
+                val range = Titles.pageRange(name)
                 Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
                     Text(
                         "${i + 1}.",
                         fontSize = 10.5.sp,
                         color = Glass.TextTertiary,
-                        modifier = Modifier.width(20.dp)
+                        modifier = Modifier.width(22.dp)
                     )
-                    Text(
-                        name,
-                        fontSize = 11.sp,
-                        color = Glass.Text,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            name,
+                            fontSize = 11.sp,
+                            color = Glass.Text,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (range != null) {
+                            Spacer(Modifier.height(1.dp))
+                            Text("第 ${range.first}-${range.last} 页", fontSize = 9.5.sp, color = Glass.TextTertiary)
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
                     Text("$pages 页", fontSize = 10.sp, color = Glass.TextDim)
                 }
             }
         }
 
+        if (done == null) {
+            Spacer(Modifier.height(12.dp))
+            Text("合并后的书名", fontSize = 10.5.sp, color = Glass.TextTertiary)
+            Spacer(Modifier.height(4.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Glass.palette.inputField)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                BasicTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    singleLine = false,
+                    maxLines = 3,
+                    textStyle = androidx.compose.ui.text.TextStyle(color = Glass.Text, fontSize = 12.sp),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Glass.Accent),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            GlassPill("取消", modifier = Modifier.weight(1f).height(42.dp), onClick = onClose)
-            GlassPill(
-                "合并",
-                selected = true,
-                modifier = Modifier.weight(1.2f).height(42.dp),
-                onClick = {
-                    val c = lib.mergeComics(ids)
-                    if (c != null) {
-                        onToast("已合并成「${c.title}」：${c.chapterMarks.size} 章 · ${c.pages.size} 页")
-                        onClose()
-                    } else onToast("合并失败")
-                }
-            )
+            if (done == null) {
+                GlassPill("取消", modifier = Modifier.weight(1f).height(42.dp), onClick = onClose)
+                GlassPill(
+                    "合并",
+                    selected = true,
+                    modifier = Modifier.weight(1.2f).height(42.dp),
+                    onClick = {
+                        val c = lib.mergeComics(ids, title)
+                        if (c != null) {
+                            merged = c
+                            onToast("已合并成「${c.title}」：${c.chapterMarks.size} 章 · ${c.pages.size} 页")
+                        } else onToast("合并失败")
+                    }
+                )
+            } else {
+                GlassPill(
+                    "撤销这次合并",
+                    accent = Glass.Warn,
+                    modifier = Modifier.weight(1.3f).height(42.dp),
+                    onClick = {
+                        if (lib.undo()) {
+                            onToast("已还原到合并前")
+                            onClose()
+                        } else onToast("没有可撤销的操作")
+                    }
+                )
+                GlassPill(
+                    "完成",
+                    selected = true,
+                    modifier = Modifier.weight(1f).height(42.dp),
+                    onClick = onClose
+                )
+            }
         }
     }
 }

@@ -108,6 +108,7 @@ fun ShelfScreen(
     // 书架自带的两个工具入口：整理（合并/清重）与链接记录
     var showOrganize by remember { mutableStateOf(false) }
     var showLinks by remember { mutableStateOf(false) }
+    var showSort by remember { mutableStateOf(false) }
     var mergeIds by remember { mutableStateOf<Set<String>?>(null) }
     var toast by remember { mutableStateOf("") }
     var undoHint by remember { mutableStateOf(false) }
@@ -250,23 +251,10 @@ fun ShelfScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     GlassPill(
-                        when (sort) {
-                            SortMode.RECENT -> "最近阅读 ▾"
-                            SortMode.ADDED -> "最近添加 ▾"
-                            SortMode.TITLE -> "标题 ▾"
-                            SortMode.PAGES -> "页数 ▾"
-                        },
+                        "${sort.label} ▾",
                         selected = true,
                         accent = Glass.Accent,
-                        onClick = {
-                            sort = when (sort) {
-                                SortMode.RECENT -> SortMode.ADDED
-                                SortMode.ADDED -> SortMode.TITLE
-                                SortMode.TITLE -> SortMode.PAGES
-                                SortMode.PAGES -> SortMode.RECENT
-                            }
-                            prefs.sort = sort
-                        }
+                        onClick = { showSort = true }
                     )
                     GlassPill(
                         if (favFirst) "收藏优先" else "不置顶收藏",
@@ -425,16 +413,6 @@ fun ShelfScreen(
             }
         }
 
-        if (selectMode && selected.size >= 2) {
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 208.dp)
-            ) {
-                GlassPill("合并所选 ${selected.size} 册", selected = true) { mergeIds = selected }
-            }
-        }
-
         if (selectMode) {
             SelectionBar(
                 count = selected.size,
@@ -448,6 +426,7 @@ fun ShelfScreen(
                 onCache = {
                     onCacheMany(selected.mapNotNull { id -> lib.comics.firstOrNull { it.id == id } })
                 },
+                onMerge = { mergeIds = selected },
                 onExport = { onExport(ExportKind.TXT, selected) },
                 onDelete = { confirmDelete = selected },
                 onExit = { selected = emptySet() },
@@ -531,7 +510,18 @@ fun ShelfScreen(
     }
 
 
-    // 书架页自己的工具：整理 / 合并预览 / 链接记录
+    // 书架页自己的工具：排序 / 整理 / 合并预览 / 链接记录
+    if (showSort) {
+        SortSheet(
+            current = sort,
+            onPick = { m ->
+                sort = m
+                prefs.sort = m
+                showSort = false
+            },
+            onClose = { showSort = false }
+        )
+    }
     if (showOrganize) {
         OrganizeSheet(lib = lib, onClose = { showOrganize = false }, onToast = { toast = it })
     }
@@ -539,7 +529,10 @@ fun ShelfScreen(
         ManualMergeSheet(
             lib = lib,
             ids = ids,
-            onClose = { mergeIds = null },
+            onClose = {
+                mergeIds = null
+                selected = emptySet()
+            },
             onToast = { msg ->
                 toast = msg
                 if (msg.startsWith("已合并")) undoHint = true
@@ -734,16 +727,16 @@ private fun ComicTile(
 
     Column(
         Modifier
-            .clip(Glass.R18)
-            .liquidGlass(Glass.R18, cornerRadius = 18.dp, elevation = 14.dp, tintScale = 0.9f)
-            .border(1.6.dp, if (selected) Glass.Accent else Color.Transparent, Glass.R18)
+            .clip(Glass.R10)
+            .liquidGlass(Glass.R10, cornerRadius = 10.dp, elevation = 14.dp, tintScale = 0.9f)
+            .border(1.6.dp, if (selected) Glass.Accent else Color.Transparent, Glass.R10)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.74f)
-                .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
                 // 封面要自己处理长按，否则内层 clickable 会把「长按进多选」吃掉
                 .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
@@ -879,8 +872,8 @@ private fun ComicRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .liquidGlass(Glass.R22, cornerRadius = 22.dp, elevation = 14.dp)
-            .border(1.6.dp, if (selected) Glass.Accent else Color.Transparent, Glass.R22)
+            .liquidGlass(Glass.R14, cornerRadius = 14.dp, elevation = 14.dp)
+            .border(1.6.dp, if (selected) Glass.Accent else Color.Transparent, Glass.R14)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -889,8 +882,8 @@ private fun ComicRow(
             Modifier
                 .width(64.dp)
                 .height(86.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .border(1.dp, Glass.MediaStroke, RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(8.dp))
+                .border(1.dp, Glass.MediaStroke, RoundedCornerShape(8.dp))
                 .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
             AsyncImage(
@@ -1081,6 +1074,7 @@ private fun SelectionBar(
     caching: Boolean,
     onSelectAll: () -> Unit,
     onCache: () -> Unit,
+    onMerge: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
     onExit: () -> Unit
@@ -1107,6 +1101,14 @@ private fun SelectionBar(
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassPill(if (caching) "缓存中…" else "缓存", accent = Glass.Good, enabled = !caching, onClick = onCache)
+            // 选够两册才能合并：一册没什么可并的
+            GlassPill(
+                if (count >= 2) "合并 $count 册" else "合并",
+                selected = count >= 2,
+                accent = Glass.Accent2,
+                enabled = count >= 2,
+                onClick = onMerge
+            )
             GlassPill("导出", accent = Glass.Accent, onClick = onExport)
             GlassPill("删除", accent = Glass.Bad, onClick = onDelete)
         }
