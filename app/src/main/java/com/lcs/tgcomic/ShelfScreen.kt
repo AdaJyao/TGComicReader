@@ -160,8 +160,11 @@ fun ShelfScreen(
     val tick = lib.tick.value
     // 排序/过滤只在书架、排序、搜索词变化时重算：滚动时不再每帧排一遍
     // tab==1 是「收藏」页：同一套网格，只留收藏的册子
-    val shown = remember(tick, sort, favFirst, query, tab) {
-        val all = lib.sortComics(sort, favFirst).let { list ->
+    // 收藏页固定「最近阅读」排序（那里的排序/筛选控件已经去掉，避免和书架重复）
+    val effectiveSort = if (tab == 1) SortMode.RECENT else sort
+    val useGrid = if (tab == 1) false else grid
+    val shown = remember(tick, effectiveSort, favFirst, query, tab) {
+        val all = lib.sortComics(effectiveSort, favFirst).let { list ->
             if (tab == 1) list.filter { it.favorite } else list
         }
         if (query.isBlank()) all else all.filter {
@@ -182,6 +185,8 @@ fun ShelfScreen(
             )
 
             if (tab == 0 || tab == 1) {
+                // 搜索 + 视图切换 + 排序筛选：只有书架有；收藏页是「固定视图」
+                if (tab == 0) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -241,7 +246,23 @@ fun ShelfScreen(
                     Spacer(Modifier.weight(1f))
                     Text("${shown.size} 册", fontSize = 10.5.sp, color = Glass.TextTertiary)
                 }
-                Spacer(Modifier.height(8.dp))
+                }
+                if (tab == 1) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 4.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "收藏 ${shown.size} 册 · 按最近阅读排序",
+                            fontSize = 11.sp,
+                            color = Glass.TextTertiary
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text("长按可取消收藏", fontSize = 10.sp, color = Glass.TextTertiary)
+                    }
+                } else {
+                    Spacer(Modifier.height(8.dp))
+                }
 
                 if (lib.comics.isEmpty() || (tab == 1 && shown.isEmpty() && query.isBlank())) {
                     EmptyState(
@@ -257,7 +278,7 @@ fun ShelfScreen(
                         detail = "换个关键词试试",
                         accent = Glass.Accent2
                     )
-                } else if (grid) {
+                } else if (useGrid) {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(columns),
                         contentPadding = PaddingValues(
@@ -391,7 +412,7 @@ fun ShelfScreen(
         }
 
         // 导入：从底栏挪到右下角悬浮按钮（导入是动作，不该占一个“目的地”位）
-        if (!selectMode && (tab == 0 || tab == 1)) {
+        if (!selectMode && tab == 0) {
             Box(
                 Modifier
                     .align(Alignment.BottomEnd)

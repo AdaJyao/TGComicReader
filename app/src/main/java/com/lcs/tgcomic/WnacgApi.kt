@@ -47,6 +47,7 @@ object WnacgApi {
     private val PAGE_COUNT = Regex("""頁數[：:]\s*(\d+)\s*[Pp]""")
     private val VIEW_LINK = Regex("""/photos-view-id-(\d+)\.html""")
     private val PAGER = Regex("""/photos-index-page-(\d+)-aid-\d+\.html""")
+    private val THUMB_SRC = Regex("""src="(//t\d+\.qy0\.ru/data/t/[^"]+)"""", RegexOption.IGNORE_CASE)
     private val THUMB = Regex("""<img[^>]+src="(//t\d+\.qy0\.ru/data/t/[^"]+)"[^>]*alt="[^"]*_(\d+)""", RegexOption.IGNORE_CASE)
     private val FULL_IMG = Regex("<img[^>]+src=\"(//img\\d+\\.qy0\\.ru/data/[^\"]+)\"", RegexOption.IGNORE_CASE)
     private val ALBUM_ITEM = Regex(
@@ -94,7 +95,7 @@ object WnacgApi {
         val cover: String
     )
 
-    data class Ref(val url: String, val title: String)
+    data class Ref(val url: String, val title: String, val cover: String = "")
 
     // ---------------- 抓取 ----------------
 
@@ -179,10 +180,10 @@ object WnacgApi {
         return https(raw)
     }
 
-    /** 列表页 → 多册 */
+    /** 列表页 → 多册（缩略图是静态地址，直接给「发现」页当封面） */
     suspend fun expandList(url: String, limit: Int = MAX_LIST_ITEMS): List<Ref> {
         val html = getHtml(url.trim())
-        val out = LinkedHashMap<String, String>()
+        val out = LinkedHashMap<String, Ref>()
         ALBUM_ITEM.findAll(html).forEach { m ->
             if (out.size >= limit) return@forEach
             val id = m.groupValues[1]
@@ -190,9 +191,11 @@ object WnacgApi {
             val title = ALT.find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
                 ?: clean(TAG.replace(body, " ")).takeIf { it.isNotBlank() }
                 ?: ""
-            out.putIfAbsent("https://www.$HOST/photos-index-aid-$id.html", title)
+            val cover = THUMB_SRC.find(body)?.groupValues?.get(1)?.let { https(it) }.orEmpty()
+            val url = "https://www.$HOST/photos-index-aid-$id.html"
+            out.putIfAbsent(url, Ref(url, title, cover))
         }
-        return out.map { Ref(it.key, it.value) }
+        return out.values.toList()
     }
 
     // ---------------- 文本 ----------------

@@ -67,6 +67,11 @@ object EhApi {
     private val OG_IMAGE = Regex("""<meta\b[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
     private val ANY_HATH_IMG = Regex("""(https?://[^"'\s]*hath\.network[^"'\s]*)""", RegexOption.IGNORE_CASE)
     /** 列表页结果行 */
+    private val GLINK = Regex(
+        """<div class="glink"[^>]*>(.*?)</div>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+    private val THUMB_IMG = Regex("""<img[^>]+src="(https?://ehgt\.org/[^"]+)"""", RegexOption.IGNORE_CASE)
     private val GL3 = Regex(
         """<td[^>]*class="gl3c[^"]*"[^>]*>\s*<a[^>]+href="(https?://[^"]+/g/\d+/[0-9a-fA-F]+/)"[^>]*>\s*<div class="glink">(.*?)</div>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
@@ -114,7 +119,7 @@ object EhApi {
         val coverH: Int = 258
     )
 
-    data class Ref(val url: String, val title: String)
+    data class Ref(val url: String, val title: String, val cover: String = "")
 
     // ---------------- 抓取 ----------------
 
@@ -274,19 +279,36 @@ object EhApi {
         return decode(raw).trim().takeIf { it.startsWith("http") }
     }
 
-    /** 列表页 → 多册（搜索 / 标签 / 首页 / 收藏夹） */
+    /** 列表页 → 多册（搜索 / 标签 / 首页 / 收藏夹），顺带取缩略图给「发现」页当封面 */
     suspend fun expandList(url: String, cookie: String, limit: Int = MAX_LIST_ITEMS): List<Ref> {
         val html = getHtml(url.trim(), cookie)
-        val out = LinkedHashMap<String, String>()
-        GL3.findAll(html).forEach { m ->
-            if (out.size < limit) out.putIfAbsent(m.groupValues[1], clean(m.groupValues[2]))
+        val out = LinkedHashMap<String, Ref>()
+
+        // 每个结果是一行 <tr>：缩略图（ehgt.org）在 gl1c 单元格，标题/画廊链接在 gl3c 单元格。
+        // 按行切块才能把封面和链接对上。
+        for (row in html.split("<tr")) {
+            if (out.size >= limit) break
+            val link = GALLERY_HREF.find(row)?.groupValues?.get(1)?.trim() ?: continue
+            if (link.isBlank() || out.containsKey(link)) continue
+            val title = GLINK.find(row)?.let { clean(it.groupValues[1]) }.orEmpty()
+            val cover = THUMB_IMG.find(row)?.groupValues?.get(1)?.let { decode(it) }.orEmpty()
+            out[link] = Ref(link, title, cover)
+        }
+
+        // 兜底：老结构（没有 <tr> 分块）
+        if (out.isEmpty()) {
+            GL3.findAll(html).forEach { m ->
+                val u = m.groupValues[1]
+                if (out.size < limit) out.putIfAbsent(u, Ref(u, clean(m.groupValues[2])))
+            }
         }
         if (out.isEmpty()) {
             GALLERY_HREF.findAll(html).forEach { m ->
-                if (out.size < limit) out.putIfAbsent(m.groupValues[1], "")
+                val u = m.groupValues[1]
+                if (out.size < limit) out.putIfAbsent(u, Ref(u, ""))
             }
         }
-        return out.map { Ref(it.key, it.value) }
+        return out.values.toList()
     }
 
     // ---------------- 文本 ----------------

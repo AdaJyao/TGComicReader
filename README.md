@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.25 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.26 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -37,6 +37,7 @@
 | [v2.23](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.23) | **改发 release 包（AOT 编译）**，修掉书架滚动卡顿的真因 |
 | [v2.24](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.24) | 设置页重构：一级分组 → 二级设置，每项都能真正修改 |
 | [v2.25](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.25) | 底栏重排（书架/收藏/发现/设置）、新增发现页、9 套主题、右上角菜单并入设置 |
+| [v2.26](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.26) | 发现页带封面 + 点卡片预览；书架与收藏页做出结构区分 |
 
 ## 构建
 
@@ -984,3 +985,29 @@ sideload 的 release 包安装时是 `verify` 状态，ART 会在使用中把热
 
 墨蓝 / 纯黑 / **靛紫** / **森绿** / **落日** / **玫瑰**（深色）+ 浅色 / **沙金**（浅色）+ 跟随系统。
 外观页每行 4 个色卡，点一下整套 UI 立即换色。
+
+---
+
+## 2.26 发现页带封面 + 书架/收藏页做区分
+
+### 一、发现页：封面 + 可点开的预览
+
+- 每条结果改成卡片：**左边封面缩略图**（wnacg 的 `/data/t/` 静态缩略图、E-Hentai 的 `ehgt.org` 缩略图）、
+  标题、来源
+- **点整张卡片 → 大图预览弹窗**：标题、来源、大封面，以及「加入书架」
+- 卡片右侧「加入」＝直接进入导入流程（解析 → 预览页数 → 入库），和手动粘贴完全同一条路
+- 取封面时顺带把列表解析改成按 `<tr>` 分块：E-Hentai 的缩略图在 gl1c 单元格、标题在 gl3c，
+  分块才能把封面和画廊对上
+
+### 二、书架 vs 收藏：职责分开
+
+| | 书架 | 收藏 |
+|---|---|---|
+| 布局 | 网格 / 列表可切换（跟随设置） | **固定单列列表**（大封面 + 星标 + 读到第几页） |
+| 搜索 | 有 | 无 |
+| 排序 / 收藏优先 | 有 | 无（**固定最近阅读**） |
+| 导入悬浮按钮 | 有 | 无（收藏不是导入的地方） |
+| 顶部 | 搜索框 + 视图切换 + 排序行 | 一行说明：收藏 N 册 · 按最近阅读排序 · 长按可取消收藏 |
+| 多选 / 长按菜单 / 批量缓存 | 有 | 有（共用同一套逻辑） |
+
+现在两页看一眼就知道在哪儿，不再是一模一样的格子。
