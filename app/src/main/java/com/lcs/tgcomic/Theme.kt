@@ -25,6 +25,11 @@ enum class AppTheme(val label: String, val dark: Boolean) {
     ROSE("玫瑰", true),
     PAPER("浅色", false),
     SAND("沙金", false),
+    SNOW("雪白", false),
+    MINT("薄荷", false),
+    SAKURA("樱粉", false),
+    SEA("海盐", false),
+    LILAC("雾紫", false),
     SYSTEM("跟随系统", true)
 }
 
@@ -258,6 +263,72 @@ val SandPalette = PaperPalette.copy(
     veil = Color(0xFFF7F3EA)
 )
 
+// ── 其余浅色主题：白底 + 不同色温/强调色 ──────────────
+val SnowPalette = PaperPalette.copy(
+    accent = Color(0xFF2F4F8F),
+    accent2 = Color(0xFF5A6E9E),
+    accent3 = Color(0xFF8A5A7A),
+    bg = Color(0xFFFBFBFC),
+    surfaceVariant = Color(0xFFEFF1F4),
+    outline = Color(0xFFE3E6EB),
+    bgTop = Color(0xFFFBFBFC),
+    bgMid = Color(0xFFFBFBFC),
+    bgBottom = Color(0xFFFBFBFC),
+    veil = Color(0xFFFBFBFC)
+)
+
+val MintPalette = PaperPalette.copy(
+    accent = Color(0xFF2E8B6E),
+    accent2 = Color(0xFF4E9E7A),
+    accent3 = Color(0xFF8A9E3A),
+    bg = Color(0xFFF1F7F3),
+    surfaceVariant = Color(0xFFE6F0EA),
+    outline = Color(0xFFDCE9E2),
+    bgTop = Color(0xFFF1F7F3),
+    bgMid = Color(0xFFF1F7F3),
+    bgBottom = Color(0xFFF1F7F3),
+    veil = Color(0xFFF1F7F3)
+)
+
+val SakuraPalette = PaperPalette.copy(
+    accent = Color(0xFFC2507B),
+    accent2 = Color(0xFFD97E86),
+    accent3 = Color(0xFF9A6AB0),
+    bg = Color(0xFFFDF4F6),
+    surfaceVariant = Color(0xFFF7E9EE),
+    outline = Color(0xFFEFD9E1),
+    bgTop = Color(0xFFFDF4F6),
+    bgMid = Color(0xFFFDF4F6),
+    bgBottom = Color(0xFFFDF4F6),
+    veil = Color(0xFFFDF4F6)
+)
+
+val SeaPalette = PaperPalette.copy(
+    accent = Color(0xFF2C6CA8),
+    accent2 = Color(0xFF3E93B8),
+    accent3 = Color(0xFF6A7FB8),
+    bg = Color(0xFFF2F7FB),
+    surfaceVariant = Color(0xFFE7EFF6),
+    outline = Color(0xFFD9E5F0),
+    bgTop = Color(0xFFF2F7FB),
+    bgMid = Color(0xFFF2F7FB),
+    bgBottom = Color(0xFFF2F7FB),
+    veil = Color(0xFFF2F7FB)
+)
+
+val LilacPalette = PaperPalette.copy(
+    accent = Color(0xFF6A4FA3),
+    accent2 = Color(0xFF8E74C0),
+    accent3 = Color(0xFFB0558C),
+    bg = Color(0xFFF7F5FB),
+    surfaceVariant = Color(0xFFEDE9F5),
+    outline = Color(0xFFE1DBEE),
+    bgTop = Color(0xFFF7F5FB),
+    bgMid = Color(0xFFF7F5FB),
+    bgBottom = Color(0xFFF7F5FB),
+    veil = Color(0xFFF7F5FB)
+)
+
 fun paletteOf(theme: AppTheme, systemDark: Boolean): GlassPalette = when (theme) {
     AppTheme.AURORA -> InkPalette
     AppTheme.OLED -> OledPalette
@@ -267,6 +338,11 @@ fun paletteOf(theme: AppTheme, systemDark: Boolean): GlassPalette = when (theme)
     AppTheme.ROSE -> RosePalette
     AppTheme.PAPER -> PaperPalette
     AppTheme.SAND -> SandPalette
+    AppTheme.SNOW -> SnowPalette
+    AppTheme.MINT -> MintPalette
+    AppTheme.SAKURA -> SakuraPalette
+    AppTheme.SEA -> SeaPalette
+    AppTheme.LILAC -> LilacPalette
     AppTheme.SYSTEM -> if (systemDark) InkPalette else PaperPalette
 }
 

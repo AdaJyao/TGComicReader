@@ -167,7 +167,7 @@ fun SettingsScreen(
                         item {
                             SettingRow(
                                 "主题说明",
-                                subtitle = "跟随系统：按系统的深/浅色自动切换。其余都是固定配色（5 种深色 + 2 种浅色）。",
+                                subtitle = "跟随系统：按系统的深/浅色自动切换。其余都是固定配色（6 种深色 + 7 种浅色）。",
                                 onClick = null
                             )
                         }

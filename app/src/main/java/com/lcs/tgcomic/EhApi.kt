@@ -121,6 +121,36 @@ object EhApi {
 
     data class Ref(val url: String, val title: String, val cover: String = "")
 
+    /** 「发现」页点开卡片时用的轻量信息（只请求一次画廊页，不展开全部图片页） */
+    data class Peek(
+        val title: String,
+        val pages: Int,
+        val author: String,
+        val category: String,
+        val cover: String = ""
+    )
+
+    suspend fun peek(url: String, cookie: String): Peek {
+        val html = getHtml(url.trim(), cookie)
+        if (Net.looksLikeChallenge(html)) {
+            throw IOException("e-hentai 触发了 Cloudflare 人机验证：用手机浏览器打开一次 e-hentai.org 过验证，再回来重试")
+        }
+        detectBan(html)?.let { ms ->
+            throw IOException("站点临时封禁，还要等约 ${(ms / 60000).coerceAtLeast(1)} 分钟")
+        }
+        val title = GN.find(html)?.groupValues?.get(1)?.let { clean(it) }.orEmpty()
+        val pages = LENGTH.find(html)?.groupValues?.get(1)?.replace(",", "")?.toIntOrNull()
+            ?: SHOWING.find(html)?.groupValues?.get(3)?.toIntOrNull()
+            ?: 0
+        val author = ARTIST.find(html)?.groupValues?.get(1)?.let { clean(it) }
+            ?.takeIf { it.isNotBlank() }
+            ?: GROUP.find(html)?.groupValues?.get(1)?.let { clean(it) }?.takeIf { it.isNotBlank() }
+            ?: UPLOADER.find(html)?.groupValues?.get(1)?.let { clean(it) }.orEmpty()
+        val cover = THUMB_STYLE.find(html)?.groupValues?.get(3)?.let { decode(it) }.orEmpty()
+            .ifBlank { THUMB_BG.find(html)?.groupValues?.get(1)?.let { decode(it) }.orEmpty() }
+        return Peek(title, pages, author, "", cover)
+    }
+
     // ---------------- 抓取 ----------------
 
     private var lastAt = 0L

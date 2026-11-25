@@ -45,6 +45,7 @@ object WnacgApi {
 
     private val H2 = Regex("""<h2[^>]*>(.*?)</h2>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
     private val PAGE_COUNT = Regex("""頁數[：:]\s*(\d+)\s*[Pp]""")
+    private val CATEGORY = Regex("""分類[：:]\s*([^<\s]+)""")
     private val VIEW_LINK = Regex("""/photos-view-id-(\d+)\.html""")
     private val PAGER = Regex("""/photos-index-page-(\d+)-aid-\d+\.html""")
     private val THUMB_SRC = Regex("""src="(//t\d+\.qy0\.ru/data/t/[^"]+)"""", RegexOption.IGNORE_CASE)
@@ -96,6 +97,28 @@ object WnacgApi {
     )
 
     data class Ref(val url: String, val title: String, val cover: String = "")
+
+    /** 「发现」页详情用的轻量信息：只拉相册首页，不逐页翻 */
+    data class Peek(
+        val title: String,
+        val total: Int,
+        val author: String,
+        val category: String,
+        val cover: String
+    )
+
+    suspend fun peek(url: String): Peek {
+        val aid = albumId(url) ?: throw IOException("认不出这个 wnacg 相册链接")
+        val html = getHtml("https://www.$HOST/photos-index-aid-$aid.html")
+        val title = H2.find(html)?.groupValues?.get(1)?.let { clean(it) }.orEmpty()
+            .ifBlank { "wnacg-$aid" }
+        val total = PAGE_COUNT.find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val cover = THUMB.find(html)?.groupValues?.get(1)?.let { https(it) }.orEmpty()
+        val category = CATEGORY.find(html)?.groupValues?.get(1)?.let { clean(it) }.orEmpty()
+        val author = Regex("""^[\[［]([^\]］]+)[\]］]""").find(title)?.groupValues?.get(1).orEmpty()
+        return Peek(title, total, author, category, cover)
+    }
+
 
     // ---------------- 抓取 ----------------
 

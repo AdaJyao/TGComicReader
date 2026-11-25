@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.26 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.27 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -38,6 +38,7 @@
 | [v2.24](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.24) | 设置页重构：一级分组 → 二级设置，每项都能真正修改 |
 | [v2.25](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.25) | 底栏重排（书架/收藏/发现/设置）、新增发现页、9 套主题、右上角菜单并入设置 |
 | [v2.26](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.26) | 发现页带封面 + 点卡片预览；书架与收藏页做出结构区分 |
+| [v2.27](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.27) | 发现页改两列卡片 + 上下翻页 + 详情弹窗；浅色主题扩到 7 套 |
 
 ## 构建
 
@@ -1011,3 +1012,34 @@ sideload 的 release 包安装时是 `verify` 状态，ART 会在使用中把热
 | 多选 / 长按菜单 / 批量缓存 | 有 | 有（共用同一套逻辑） |
 
 现在两页看一眼就知道在哪儿，不再是一模一样的格子。
+
+---
+
+## 2.27 发现页重排 + 更多浅色主题
+
+### 一、发现页：两列卡片 + 翻页 + 详情
+
+- **两列网格**：封面（3:4 裁切）+ 标题两行 + 来源小字，比之前一行一条更像浏览
+- **翻页**：列表底部「上一页 / 第 N 页 / 下一页」，页码在顶部副标题同步显示
+  - 紳士漫畫：`albums-index-page-N.html`
+  - E-Hentai：`?page=N`（搜索也带页）
+- **点卡片 → 详情**：大封面 + 标题 + **页数** + **作者** + **分类** + 来源，
+  底部「关闭 / 加入书架」。详情只请求一次相册/画廊页（`WnacgApi.peek` / `EhApi.peek`），
+  不展开全部图片页，所以点开很快
+
+顺手修的坑：弹窗原来是放在整页 `Column` 之外的第二行，会被排到屏幕外（点卡片没反应）。
+现在改成和列表叠在同一个 `Box` 里，点一下就出来。
+
+### 二、浅色主题 2 → 7 套
+
+深色 6 套不变（墨蓝 / 纯黑 / 靛紫 / 森绿 / 落日 / 玫瑰），浅色新增 5 套：
+
+| 主题 | 底色 | 强调色 |
+|---|---|---|
+| 雪白 | 近白冷灰 | 深靛蓝 |
+| 薄荷 | 淡青绿 | 墨绿 |
+| 樱粉 | 淡粉 | 玫红 |
+| 海盐 | 淡蓝灰 | 海蓝 |
+| 雾紫 | 淡紫灰 | 紫罗兰 |
+
+加上原有「浅色 / 沙金」共 7 套浅色 + 跟随系统，一共 14 项。
