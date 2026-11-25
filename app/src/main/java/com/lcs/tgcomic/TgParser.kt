@@ -1,5 +1,9 @@
 package com.lcs.tgcomic
 
+import kotlinx.coroutines.channels.Channel as CChannel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
 /**
  * Telegram 公开频道 / 消息链接解析。
  *
@@ -106,33 +110,85 @@ object TgParser {
         )
     }
 
-    /** 拉取并解析；目标消息不在首页时用 ?before=id+1 精确定位 */
+    /**
+     * 拉取并解析。
+     *
+     * 速度关键：单条消息的「嵌入页」和「?before=id+1 频道页」两个候选**并发**去取，
+     * 谁先解析到目标消息就用谁（原来是一条失败后干等超时再串行取第二条）。
+     * 频道首页 HTML 短期缓存，连着粘同一个频道的多条链接时不用重复下载。
+     */
     suspend fun load(url: String): Channel? {
         val link = parseLink(url) ?: return null
         val channel = link.channel
         val msgId = link.msgId
 
-        if (msgId != null) {
-            // 1) 单条嵌入页 https://t.me/<ch>/<id>?embed=1：只含这一条，老消息/相册都稳
-            val embed = runCatching { fetch("https://t.me/$channel/$msgId?embed=1") }.getOrNull()
-            if (embed != null) {
-                val hit = parsePosts(embed, channel).filter { it.key == "$channel/$msgId" }
-                if (hit.isNotEmpty()) return Channel(channelTitle(embed, channel), hit)
-            }
-
-            // 2) 网页预览窗口：?before=id+1
-            val html = fetch("https://t.me/s/$channel?before=${msgId + 1}")
-            val hit = parsePosts(html, channel).filter { it.key == "$channel/$msgId" }
-            if (hit.isNotEmpty()) return Channel(channelTitle(html, channel), hit)
-
-            val html2 = fetch("https://t.me/s/$channel")
-            val hit2 = parsePosts(html2, channel).filter { it.key == "$channel/$msgId" }
-            if (hit2.isNotEmpty()) return Channel(channelTitle(html2, channel), hit2)
-            return null
+        if (msgId == null) {
+            val html = channelPage(channel)
+            val posts = parsePosts(html, channel)
+            if (posts.isEmpty()) return null
+            return Channel(channelTitle(html, channel), posts)
         }
 
+        val key = "$channel/$msgId"
+        // 缓存命中就别再发请求（连续粘同一个频道里的多条链接时很快）
+        val cached = lastChannelHtml
+        if (cached != null && lastChannelName == channel &&
+            System.currentTimeMillis() - lastChannelAt < 120_000L
+        ) {
+            hitOf(cached, channel, key)?.let { return it }
+        }
+
+        // 两个候选一起发，先到的先用
+        val first = kotlinx.coroutines.coroutineScope {
+            val ch = CChannel<Channel?>(CChannel.CONFLATED)
+            val jobs = listOf(
+                launch {
+                    val html = runCatching {
+                        Net.getText("https://t.me/$channel/$msgId?embed=1", retries = 2)
+                    }.getOrNull()
+                    if (html != null) hitOf(html, channel, key)?.let { ch.trySend(it) }
+                },
+                launch {
+                    val html = runCatching {
+                        Net.getText("https://t.me/s/$channel?before=${msgId + 1}", retries = 2)
+                    }.getOrNull()
+                    if (html != null) {
+                        lastChannelHtml = html
+                        lastChannelName = channel
+                        hitOf(html, channel, key)?.let { ch.trySend(it) }
+                    }
+                }
+            )
+            val got = withTimeoutOrNull(12_000) { ch.receive() }
+            jobs.forEach { it.cancel() }
+            got
+        }
+        if (first != null) return first
+
+        // 兜底：整个频道最近一屏
+        val html = channelPage(channel)
+        return hitOf(html, channel, key)
+    }
+
+    /** 频道首页（带 2 分钟缓存） */
+    @Volatile private var lastChannelHtml: String? = null
+    @Volatile private var lastChannelName: String = ""
+    @Volatile private var lastChannelAt: Long = 0L
+
+
+    private suspend fun channelPage(channel: String): String {
+        val now = System.currentTimeMillis()
+        val cached = lastChannelHtml
+        if (cached != null && lastChannelName == channel && now - lastChannelAt < 120_000L) return cached
         val html = fetch("https://t.me/s/$channel")
-        val posts = parsePosts(html, channel)
+        lastChannelHtml = html
+        lastChannelName = channel
+        lastChannelAt = System.currentTimeMillis()
+        return html
+    }
+
+    private fun hitOf(html: String, channel: String, key: String): Channel? {
+        val posts = parsePosts(html, channel).filter { it.key == key }
         if (posts.isEmpty()) return null
         return Channel(channelTitle(html, channel), posts)
     }

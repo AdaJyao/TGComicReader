@@ -75,6 +75,9 @@ object TelegraphParser {
         setOf(RegexOption.IGNORE_CASE)
     )
 
+    /** 禁漫天堂：/album/<aid>、/photo/<cid>（任意镜像域名） */
+    private val JM_RE = Regex("""https?://[\w.-]+/(?:album|photo)/\d+""", RegexOption.IGNORE_CASE)
+
     /** 图片直链（以图片扩展名结尾）。注意不要用 $ 锚定：一段文字中间也要能认出来 */
     private val IMAGE_RE = Regex(
         """https?://[^\s"'<>）【】，,；;]+?\.(?:jpe?g|png|webp|gif|avif)(?:\?[^\s"'<>）【】，,；;]*)?""",
@@ -95,7 +98,7 @@ object TelegraphParser {
     /** 从任意文本里找全部可导入链接（telegra.ph / t.me / 图片直链），按出现顺序去重 */
     fun findAllUrls(text: String): List<String> {
         val found = mutableListOf<Pair<Int, String>>()
-        for (re in listOf(TELEGRAPH_RE, TG_RE, EH_RE, WN_RE, IMAGE_RE)) {
+        for (re in listOf(TELEGRAPH_RE, TG_RE, EH_RE, WN_RE, JM_RE, IMAGE_RE)) {
             for (m in re.findAll(text)) {
                 found.add(m.range.first to cleanUrl(m.value))
             }
@@ -108,7 +111,7 @@ object TelegraphParser {
 
     fun isSupported(url: String): Boolean =
         TELEGRAPH_RE.containsMatchIn(url) || isTgLink(url) || isImageUrl(url) ||
-            EhApi.isEh(url) || WnacgApi.isWnacg(url)
+            EhApi.isEh(url) || WnacgApi.isWnacg(url) || JmApi.isAlbum(url) || JmApi.isChapter(url)
 
     /** t.me 消息 / 频道链接 */
     fun isTgLink(url: String): Boolean =

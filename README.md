@@ -4,7 +4,7 @@
 
 ## 下载
 
-最新版：[**v2.27 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
+最新版：[**v2.33 APK**](https://github.com/AdaJyao/TGComicReader/releases/latest)
 
 全部历史版本都在 [Releases](https://github.com/AdaJyao/TGComicReader/releases)，每个 tag 对应一个 APK：
 
@@ -39,6 +39,7 @@
 | [v2.25](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.25) | 底栏重排（书架/收藏/发现/设置）、新增发现页、9 套主题、右上角菜单并入设置 |
 | [v2.26](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.26) | 发现页带封面 + 点卡片预览；书架与收藏页做出结构区分 |
 | [v2.27](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.27) | 发现页改两列卡片 + 上下翻页 + 详情弹窗；浅色主题扩到 7 套 |
+| [v2.33](https://github.com/AdaJyao/TGComicReader/releases/tag/v2.33) | 新增禁漫天堂源；telegra.ph 抓取提速；同系列自动合并 + 多维查重 |
 
 ## 构建
 
@@ -1043,3 +1044,52 @@ sideload 的 release 包安装时是 `verify` 状态，ART 会在使用中把热
 | 雾紫 | 淡紫灰 | 紫罗兰 |
 
 加上原有「浅色 / 沙金」共 7 套浅色 + 跟随系统，一共 14 项。
+
+---
+
+## 2.33 禁漫天堂 + 抓取提速 + 系列合并
+
+### 一、新增「禁漫天堂」源
+
+发现页第一个源就是它（`禁漫最新`）：
+
+| | 说明 |
+|---|---|
+| 列表 | `18comic.ink/albums?o=mr`，两列卡片 + 翻页 |
+| 封面 | `cdn-msp*.18comic.ink/media/albums/<aid>_3x4.jpg` |
+| 详情 | 相册页取标题 / 页数 / 多话数量 |
+| 导入 | 逐话读 `var page_arr`，图片直链 `media/photos/<cid>/00001.webp`（静态文件，不需要换令牌） |
+
+> 为什么用 `18comic.ink` 而不是 `18comic.vip`：vip 域在 Cloudflare 后面，
+> 普通请求只会得到 `403 Just a moment...`；ink 是同一站点的镜像，能直接拿 HTML。
+
+### 二、发现页上半部分
+
+- 去掉了叠在「发现」上面的那行「TG漫画 · 31 册」（那是书架/收藏才需要的统计）
+- 四个来源按钮缩短为 `禁漫最新 / 紳士最新 / E-Hentai / EH 搜索`，一行放得下，仍可横滑
+- 「设置」页保留标题栏，改成 `设置 · 个性化 · 来源 · 数据与备份`
+
+### 三、抓取提速（telegra.ph 等）
+
+1. **共享 OkHttp 连接池**：以前每次抓页面都新建 `HttpURLConnection`，海外站点每次都要重新 TLS 握手（1~2 秒）；
+   现在统一走一个带连接池的 OkHttp 客户端，连续抓多页时复用连接。
+2. **页面短缓存**：同一 URL 2 分钟内重复解析直接命中内存，不再重新下载。
+3. **t.me 多候选并发**：单条消息同时发「嵌入页」和「?before=id+1」两个请求，谁先解析到就用谁，
+   不再等第一个超时后再串行试第二个。
+
+### 四、同系列自动合并 + 多维查重
+
+导入时按下面的顺序判定，书架里**一个系列只留一张卡**：
+
+1. **同一册**（标题去掉页码尾巴后完全一致）→ 只补新页
+2. **重复**（下列任意一条命中）→ 不再新增
+   - 同一来源页（host + `/album/123`、`/g/123`、`/photo/123` 这类 id 相同，忽略 query）
+   - 页面集合重合度 ≥ 90%
+   - 页数相同且封面文件名相同
+   - 页数相同且第一张图相同
+3. **同系列的另一话** → 并进已有那一册，记一条章节起点
+   - 系列名 = 标题剥掉 `第N话/第N章/Ch.N/Vol.N/(3)/纯数字尾巴`
+   - 只在**同一站点内**合并，避免把不同站点的同名作品混在一起
+4. 都不命中 → 新建一册
+
+书架卡片会显示章节数：`2 章 · 279 页 · 0%`。老数据在启动时自动重算并归并。

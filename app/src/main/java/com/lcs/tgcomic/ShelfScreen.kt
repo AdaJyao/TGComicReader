@@ -178,11 +178,15 @@ fun ShelfScreen(
 
     AuroraBackground(animate = false) {
         Column(Modifier.fillMaxSize()) {
-            GlassTopBar(
-                title = "TG漫画",
-                subtitle = "${lib.comics.size} 册 · ${lib.links.size} 条链接",
-                trailing = {}
-            )
+            // 「发现」有自己的标题栏，这里再画一条就会出现「TG漫画 / 31 册」叠在「发现」上面的双层标题
+            if (tab != 2) {
+                GlassTopBar(
+                    title = if (tab == 3) "设置" else "TG漫画",
+                    subtitle = if (tab == 3) "个性化 · 来源 · 数据与备份"
+                    else "${lib.comics.size} 册 · ${lib.links.size} 条链接",
+                    trailing = {}
+                )
+            }
 
             if (tab == 0 || tab == 1) {
                 // 搜索 + 视图切换 + 排序筛选：只有书架有；收藏页是「固定视图」
@@ -458,7 +462,8 @@ fun ShelfScreen(
             visible = true,
             onDismiss = { menuFor = null },
             title = c.title,
-            subtitle = "${c.pages.size} 页 · 读到第 ${(c.lastIndex + 1).coerceAtMost(c.pages.size)} 页"
+            subtitle = (if (c.chapterMarks.size > 1) "${c.chapterMarks.size} 章 · " else "") +
+                "${c.pages.size} 页 · 读到第 ${(c.lastIndex + 1).coerceAtMost(c.pages.size)} 页"
         ) { close ->
             GlassMenuItem(if (c.favorite) "★ 取消收藏" else "☆ 加入收藏") {
                 close()
@@ -725,7 +730,8 @@ private fun ComicTile(
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "${comic.pages.size} 页 · ${(progress.coerceIn(0f, 1f) * 100).toInt()}%",
+                    (if (comic.chapterMarks.size > 1) "${comic.chapterMarks.size} 章 · " else "") +
+                        "${comic.pages.size} 页 · ${(progress.coerceIn(0f, 1f) * 100).toInt()}%",
                     fontSize = 10.sp,
                     color = Glass.TextDim
                 )
@@ -820,6 +826,7 @@ private fun ComicRow(
             Spacer(Modifier.height(5.dp))
             Text(
                 buildString {
+                    if (comic.chapterMarks.size > 1) append("${comic.chapterMarks.size} 章 · ")
                     append("${comic.pages.size} 页 · 读到 ${(comic.lastIndex + 1).coerceAtMost(comic.pages.size)}")
                     if (cached > 0) append(" · 缓存 $cached")
                     if (comic.author.isNotBlank()) append(" · ${comic.author}")

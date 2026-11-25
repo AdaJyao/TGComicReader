@@ -2,6 +2,7 @@ package com.lcs.tgcomic
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -58,9 +60,10 @@ import kotlinx.coroutines.launch
  * - 详情里「加入书架」走和手动粘贴完全相同的导入流程
  */
 private enum class DiscoverSource(val label: String) {
-    WNACG("紳士漫畫最新"),
-    EH_HOME("E-Hentai 首页"),
-    EH_SEARCH("搜索 E-Hentai")
+    JM("禁漫最新"),
+    WNACG("紳士最新"),
+    EH_HOME("E-Hentai"),
+    EH_SEARCH("EH 搜索")
 }
 
 private data class FoundItem(
@@ -86,7 +89,7 @@ fun DiscoverScreen(
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var source by remember { mutableStateOf(DiscoverSource.WNACG) }
+    var source by remember { mutableStateOf(DiscoverSource.JM) }
     var query by remember { mutableStateOf("") }
     var page by remember { mutableStateOf(1) }
     var loading by remember { mutableStateOf(false) }
@@ -100,6 +103,10 @@ fun DiscoverScreen(
     var detailError by remember { mutableStateOf("") }
 
     fun pageUrl(src: DiscoverSource, p: Int): String = when (src) {
+        DiscoverSource.JM ->
+            if (p <= 1) "${JmApi.HOME}/albums?o=mr"
+            else "${JmApi.HOME}/albums?o=mr&page=$p"
+
         DiscoverSource.WNACG ->
             if (p <= 1) "https://www.wnacg.com/albums.html"
             else "https://www.wnacg.com/albums-index-page-$p.html"
@@ -126,6 +133,10 @@ fun DiscoverScreen(
         scope.launch {
             val res = runCatching {
                 when (source) {
+                    DiscoverSource.JM ->
+                        JmApi.expandList(pageUrl(source, p), 24)
+                            .map { FoundItem(it.url, it.title, it.cover, "禁漫天堂") }
+
                     DiscoverSource.WNACG ->
                         WnacgApi.expandList(pageUrl(source, p), 24)
                             .map { FoundItem(it.url, it.title, it.cover, "紳士漫畫") }
@@ -146,7 +157,16 @@ fun DiscoverScreen(
         detailLoading = true
         scope.launch {
             val res = runCatching {
-                if (item.source == "紳士漫畫") {
+                if (item.source == "禁漫天堂") {
+                    val p = JmApi.peek(item.url)
+                    DetailInfo(
+                        p.title.ifBlank { item.title },
+                        p.pages,
+                        p.author,
+                        p.category,
+                        p.cover.ifBlank { item.cover }
+                    )
+                } else if (item.source == "紳士漫畫") {
                     val p = WnacgApi.peek(item.url)
                     DetailInfo(
                         p.title.ifBlank { item.title },
@@ -190,7 +210,10 @@ fun DiscoverScreen(
         )
 
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             DiscoverSource.entries.forEach { s ->

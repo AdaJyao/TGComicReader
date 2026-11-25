@@ -584,7 +584,7 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
         ) {
             if (text.isEmpty()) {
                 Text(
-                    "粘贴链接：telegra.ph 图文页 / t.me 消息或频道 / e-hentai 画廊或搜索页 / 图片直链，\n一行一个；整段分享文字也可以",
+                    "粘贴链接：telegra.ph 图文页 / t.me 消息或频道 / e-hentai 画廊或搜索页 / 紳士漫畫 / 禁漫天堂 / 图片直链，\n一行一个；整段分享文字也可以",
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
                     color = Glass.TextDim.copy(alpha = 0.7f)
@@ -600,7 +600,7 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            if (urls.isEmpty()) "支持 telegra.ph · t.me · e-hentai/exhentai · 紳士漫畫 wnacg · 图片直链" else "已识别 ${urls.size} 个链接",
+            if (urls.isEmpty()) "支持 telegra.ph · t.me · e-hentai/exhentai · 紳士漫畫 wnacg · 禁漫天堂 18comic · 图片直链" else "已识别 ${urls.size} 个链接",
             fontSize = 11.sp,
             color = if (urls.isEmpty()) Glass.TextDim else Glass.Good
         )

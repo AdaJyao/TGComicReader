@@ -19,6 +19,39 @@ object Net {
     class RateLimited(message: String) : IOException(message)
 
     /**
+     * 抓 HTML 用的共享 OkHttp：连接池 + HTTP/2。
+     * 原来每次 Net.getText 都新建 HttpURLConnection，telegra.ph / t.me 这种海外站点
+     * 每次都要重新 TLS 握手（1~2 秒），连着解析几页时体感就是「慢」。
+     */
+    private val http: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    /** 页面 HTML 短缓存（2 分钟 / 12 条）：同一链接重复解析、多页图文来回跳时不再重新下载 */
+    private const val CACHE_TTL = 120_000L
+    private val htmlCache = object : LinkedHashMap<String, Pair<String, Long>>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, Pair<String, Long>>
+        ): Boolean = size > 12
+    }
+
+    fun cachedHtml(url: String): String? = synchronized(htmlCache) {
+        val hit = htmlCache[url] ?: return@synchronized null
+        if (System.currentTimeMillis() - hit.second > CACHE_TTL) {
+            htmlCache.remove(url)
+            null
+        } else hit.first
+    }
+
+    private fun putHtml(url: String, html: String) = synchronized(htmlCache) {
+        htmlCache[url] = html to System.currentTimeMillis()
+    }
+
+    /**
      * Cloudflare 人机验证页：e-hentai / exhentai 现在整站在 CF 后面，
      * 拿到这类页面时不能当成「页面结构变了」，要单独给用户提示。
      */
@@ -63,10 +96,13 @@ object Net {
         headers: Map<String, String> = emptyMap(),
         retries: Int = 3
     ): String = withContext(Dispatchers.IO) {
+        if (headers.isEmpty()) cachedHtml(url)?.let { return@withContext it }
         var last: Exception? = null
         for (attempt in 0 until retries.coerceAtLeast(1)) {
             try {
-                return@withContext fetch(url, headers)
+                val html = fetch(url, headers)
+                if (headers.isEmpty()) putHtml(url, html)
+                return@withContext html
             } catch (e: RateLimited) {
                 throw e
             } catch (e: Exception) {
@@ -78,6 +114,35 @@ object Net {
     }
 
     private fun fetch(url: String, headers: Map<String, String>): String {
+        return try {
+            fetchOkhttp(url, headers)
+        } catch (e: RateLimited) {
+            throw e
+        } catch (e: Exception) {
+            // OkHttp 不通（个别站点/代理组合）再退回老路子
+            fetchConn(url, headers)
+        }
+    }
+
+    private fun fetchOkhttp(url: String, headers: Map<String, String>): String {
+        val b = okhttp3.Request.Builder().url(safeUrl(url))
+            .header("User-Agent", UA)
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+            .header("Accept-Language", "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7")
+        headers.forEach { (k, v) -> if (v.isNotBlank()) b.header(k, v) }
+        return http.newCall(b.build()).execute().use { r ->
+            if (r.code == 509) throw RateLimited("站点限速（HTTP 509）：请求太快，等几分钟再试")
+            if (r.code !in 200..299) throw IOException("HTTP ${r.code}")
+            val ct = r.header("Content-Type") ?: "text/html"
+            val charset = if (ct.contains("charset=", true))
+                ct.substringAfter("charset=", "UTF-8").substringBefore(';').trim().ifBlank { "UTF-8" }
+            else "UTF-8"
+            val body = r.body?.bytes() ?: ByteArray(0)
+            body.toString(charsetOf(charset))
+        }
+    }
+
+    private fun fetchConn(url: String, headers: Map<String, String>): String {
         val conn = URL(safeUrl(url)).openConnection() as HttpURLConnection
         try {
             conn.instanceFollowRedirects = true
@@ -142,6 +207,7 @@ object Net {
         url.contains("hath.network") || url.contains("ehgt.org") ||
             url.contains("e-hentai.org") || url.contains("exhentai.org") -> "https://e-hentai.org/"
         url.contains("qy0.ru") || url.contains("wnacg.") -> "https://www.wnacg.com/"
+        url.contains("18comic") || url.contains("jmcomic") -> "https://18comic.ink/"
         url.contains("telesco.pe") || url.contains("telegram-cdn") || url.contains("t.me") ->
             "https://t.me/"
         else -> "https://telegra.ph/"

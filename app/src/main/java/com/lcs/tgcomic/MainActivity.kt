@@ -66,6 +66,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         lib = Library(applicationContext)
         lib.load()
+        // 老数据补 seriesKey，并把同一系列的多册并成一册
+        runCatching { lib.rebuildSeries() }
         prefs = Prefs(applicationContext)
         EhApi.setSlowMode(prefs.ehSlow)
 
@@ -249,6 +251,8 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun loadArticle(url: String): TelegraphParser.Article = withContext(Dispatchers.IO) {
         when {
+            JmApi.isAlbum(url) -> loadJmAlbum(url)
+            JmApi.isChapter(url) -> loadJmChapter(url)
             EhApi.isGalleryPage(url) -> loadEhGallery(url)
             EhApi.isListPage(url) -> throw IllegalStateException("这是 E-Hentai 列表页，需要先展开成多册")
             WnacgApi.isAlbum(url) -> loadWnacgAlbum(url)
@@ -269,6 +273,22 @@ class MainActivity : ComponentActivity() {
             )
             else -> loadTelegraph(url)
         }
+    }
+
+    /** 禁漫天堂相册：逐话取 page_arr，图片直链是 CDN 静态文件（不用换令牌） */
+    private suspend fun loadJmAlbum(url: String): TelegraphParser.Article {
+        val a = JmApi.loadAlbum(url) { done, total ->
+            importState = ImportState.Loading(url, total.coerceAtLeast(1), done)
+        }
+        return TelegraphParser.Article(a.url, a.title, a.author, a.pageUrls, a.cover)
+    }
+
+    /** 禁漫天堂单话：/photo/<cid> */
+    private suspend fun loadJmChapter(url: String): TelegraphParser.Article {
+        val a = JmApi.loadChapter(url) { done, total ->
+            importState = ImportState.Loading(url, total.coerceAtLeast(1), done)
+        }
+        return TelegraphParser.Article(a.url, a.title, a.author, a.pageUrls, a.cover)
     }
 
     /** 紳士漫畫相册：翻页收齐所有看图页地址，直链在读图/缓存时才换（verify 令牌有时效） */

@@ -27,7 +27,13 @@ data class Comic(
     var updatedAt: Long = System.currentTimeMillis(),
     var favorite: Boolean = false,
     /** 封面缩略图直链（EH 用画廊缩略图；为空则用第一页） */
-    var cover: String = ""
+    var cover: String = "",
+    /** 系列键：站点 + 去掉「第N话/第N章/Ch.N」后的标题，同一系列的多次导入会并进同一册 */
+    var seriesKey: String = "",
+    /** 每章的起始页下标（chapterMarks[0] 恒为 0，size>1 说明这册是多话合并的） */
+    val chapterMarks: MutableList<Int> = mutableStateListOf(),
+    /** 每章标题（与 chapterMarks 一一对应） */
+    val chapterNames: MutableList<String> = mutableStateListOf()
 )
 
 /** 分享/粘贴/剪贴板进来的链接记录（列表类） */
@@ -43,6 +49,32 @@ object Titles {
     private val pageSuffix = Regex("""\s*[-–—]?\s*Page\s*\d+\s*$""", RegexOption.IGNORE_CASE)
     private val zhPageSuffix = Regex("""\s*[-–—]?\s*第\s*\d+\s*[页頁]\s*$""")
     private val noise = Regex("""\s*[–—-]\s*Telegraph\s*$""", RegexOption.IGNORE_CASE)
+
+    /**
+     * 章节尾巴：「第3话 / 第3話 / 第三话 / 第12章 / Ch.3 / Chapter 3 / Vol.2 / (3) / 3話」
+     * 命中就剥掉，剩下的当系列名——这样「XXX 第1话」「XXX 第2话」会归到同一册。
+     */
+    private val chapterTail = Regex(
+        """[\s\-_–—·:：]*[\(\[（【]?\s*(?:第\s*[0-9一二三四五六七八九十百]+\s*[话話章卷集部篇回]|ch(?:apter)?\.?\s*\d+|ep(?:isode)?\.?\s*\d+|vol(?:ume)?\.?\s*\d+|\d+\s*[话話章卷])\s*[\)\]）】]?\s*$""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** 纯数字尾巴：「夢幻家教 01」「XXX (3)」「XXX [2]」 */
+    private val trailingNo = Regex(
+        """[\s\-_–—·:：,，]*(?:[\(\[（【]?\s*\d{1,4}\s*[\)\]）】]?)\s*$"""
+    )
+
+    /** 系列名：连续剥两次，兼容「XXX 第3话 上」这种；最后再剥掉纯数字尾巴 */
+    fun series(raw: String): String {
+        var t = raw.trim()
+        repeat(2) {
+            val n = chapterTail.replace(t, "").trim()
+            if (n.isNotBlank()) t = n
+        }
+        val noTail = trailingNo.replace(t, "").trim()
+        if (noTail.isNotBlank()) t = noTail
+        return t.trim().trimEnd('-', '_', '·', ':', '：').trim()
+    }
 
     /** 去掉 " - Page 1" 之类的页码尾巴，用于把同一册的多页帖子合并 */
     fun normalize(raw: String): String {
@@ -218,7 +250,17 @@ class Library(private val ctx: Context) {
                         author = o.optString("author", ""),
                         updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
                         favorite = o.optBoolean("favorite", false),
-                        cover = o.optString("cover", "")
+                        cover = o.optString("cover", ""),
+                        seriesKey = o.optString("seriesKey", ""),
+                        chapterMarks = mutableStateListOf<Int>().also { l ->
+                            val ma = o.optJSONArray("chapterMarks")
+                            if (ma == null || ma.length() == 0) l.add(0)
+                            else for (k in 0 until ma.length()) l.add(ma.getInt(k))
+                        },
+                        chapterNames = mutableStateListOf<String>().also { l ->
+                            val na = o.optJSONArray("chapterNames")
+                            if (na != null) for (k in 0 until na.length()) l.add(na.getString(k))
+                        }
                     )
                 )
             }
@@ -264,6 +306,9 @@ class Library(private val ctx: Context) {
                     put("favorite", c.favorite)
                     put("cover", c.cover)
                     put("pages", JSONArray(c.pages))
+                    put("seriesKey", c.seriesKey)
+                    put("chapterMarks", JSONArray(c.chapterMarks.toList()))
+                    put("chapterNames", JSONArray(c.chapterNames.toList()))
                 }
             )
         }
@@ -303,10 +348,78 @@ class Library(private val ctx: Context) {
         }
     }
 
+    /** 站点名（host 去掉 www.），用于「同站同名才算一个系列」 */
+    private fun hostOf(url: String): String =
+        url.substringAfter("://", "").substringBefore('/').lowercase().removePrefix("www.")
+
+    /** 系列键：站点 + 归一化系列名 */
+    fun seriesKeyOf(title: String, url: String): String {
+        val host = hostOf(url)
+        val series = Titles.series(Titles.normalize(title))
+        if (series.isBlank()) return ""
+        return host + "|" + series.lowercase()
+    }
+
+    /** 同标题（同一册的分页帖子） */
     fun findSameVolume(title: String): Comic? {
         val n = Titles.normalize(title)
         if (n.isBlank()) return null
         return comics.firstOrNull { Titles.normalize(it.title).equals(n, ignoreCase = true) }
+    }
+
+    /** 同一系列的已有册子 */
+    fun findSameSeries(title: String, url: String): Comic? {
+        val key = seriesKeyOf(title, url)
+        if (key.isBlank()) return null
+        return comics.firstOrNull { it.seriesKey.isNotEmpty() && it.seriesKey == key }
+            ?: comics.firstOrNull { seriesKeyOf(it.title, it.sourceUrl) == key }
+    }
+
+    /**
+     * 多维查重：命中任意一条就认为「已经收过」。
+     *   1. 同一来源页（host + 路径数字 id 相同，忽略 query）
+     *   2. 页面集合重合度 ≥ 0.9（同一次抓取换了域名/参数）
+     *   3. 页数相同 + 封面文件名相同
+     *   4. 页数相同 + 第一张图相同
+     */
+    fun findDuplicate(title: String, url: String, pages: List<String>, cover: String): Comic? {
+        val urlKey = canonicalUrlKey(url)
+        comics.firstOrNull { canonicalUrlKey(it.sourceUrl) == urlKey }?.let { return it }
+
+        val incoming = pages.map { it.substringBefore('?') }.toSet()
+        if (incoming.isNotEmpty()) {
+            comics.firstOrNull { c ->
+                if (c.pages.isEmpty() || c.pages.size != incoming.size) return@firstOrNull false
+                val mine = c.pages.map { it.substringBefore('?') }.toSet()
+                val inter = mine.count { it in incoming }
+                inter.toDouble() / incoming.size >= 0.9
+            }?.let { return it }
+        }
+
+        val coverName = cover.substringAfterLast('/').substringBefore('?')
+        if (coverName.isNotEmpty() && pages.isNotEmpty()) {
+            comics.firstOrNull { c ->
+                c.pages.size == pages.size &&
+                    c.cover.substringAfterLast('/').substringBefore('?') == coverName
+            }?.let { return it }
+        }
+
+        val first = pages.firstOrNull()?.substringBefore('?')
+        if (first != null) {
+            comics.firstOrNull { c -> c.pages.firstOrNull()?.substringBefore('?') == first }?.let { return it }
+        }
+        return null
+    }
+
+    private fun canonicalUrlKey(url: String): String {
+        val u = url.trim().substringBefore('#').substringBefore('?').trimEnd('/')
+        val host = hostOf(u)
+        val path = u.substringAfter("://", "").substringAfter('/', "")
+        // 只要路径里的数字 id：/album/123/标题、/g/123456/abc → album/123、g/123456
+        val m = Regex("""(album|g|photo|photos-index-aid|comic|manga|title|book)[^0-9]{0,4}(\d+)""")
+            .find(path)
+        return if (m != null) host + "|" + m.groupValues[1] + "|" + m.groupValues[2]
+        else host + "|" + path.lowercase()
     }
 
     /** 返回 (comic, 新增页数, 是否新建) */
@@ -317,30 +430,90 @@ class Library(private val ctx: Context) {
         author: String,
         cover: String = ""
     ): Triple<Comic, Int, Boolean> {
-        val exist = findSameVolume(title)
-        if (exist == null) {
-            val c = Comic(
-                id = comicIdOf(url),
-                title = title,
-                sourceUrl = url,
-                pages = mutableStateListOf<String>().also { it.addAll(pages) },
-                author = author,
-                cover = cover
-            )
-            comics.add(0, c)
-            tick.value++
-            return Triple(c, pages.size, true)
+        // ① 同一册（标题完全一致）：只补页
+        findSameVolume(title)?.let { exist ->
+            val added = mergePages(exist, pages, sameChapter = true)
+            if (exist.author.isBlank() && author.isNotBlank()) exist.author = author
+            if (exist.cover.isBlank() && cover.isNotBlank()) exist.cover = cover
+            val stripped = Titles.normalize(exist.title)
+            if (stripped.isNotBlank() && stripped != exist.title) exist.title = stripped
+            return Triple(exist, added, false)
         }
-        var added = 0
-        for (p in pages) if (!exist.pages.contains(p)) { exist.pages.add(p); added++ }
-        // 分页标题（"xxx - Page 2" / "xxx 第2页"）合并时把页码尾巴剥掉，中英文都要管
-        val stripped = Titles.normalize(exist.title)
-        if (stripped.isNotBlank() && stripped != exist.title) exist.title = stripped
-        if (exist.author.isBlank() && author.isNotBlank()) exist.author = author
-        if (exist.cover.isBlank() && cover.isNotBlank()) exist.cover = cover
-        exist.updatedAt = System.currentTimeMillis()
+        // ② 已收过（多维查重）：直接返回，不新增
+        findDuplicate(title, url, pages, cover)?.let { return Triple(it, 0, false) }
+        // ③ 同系列的其它话：并进已有那一册，记一条章节起点
+        findSameSeries(title, url)?.let { exist ->
+            val added = mergePages(exist, pages, sameChapter = false, chapterName = title)
+            if (exist.author.isBlank() && author.isNotBlank()) exist.author = author
+            if (exist.cover.isBlank() && cover.isNotBlank()) exist.cover = cover
+            exist.updatedAt = System.currentTimeMillis()
+            tick.value++
+            return Triple(exist, added, false)
+        }
+        // ④ 新的一册
+        val key = seriesKeyOf(title, url)
+        val c = Comic(
+            id = comicIdOf(url),
+            title = title,
+            sourceUrl = url,
+            pages = mutableStateListOf<String>().also { it.addAll(pages) },
+            author = author,
+            cover = cover,
+            seriesKey = key,
+            chapterMarks = mutableStateListOf(0),
+            chapterNames = mutableStateListOf(title)
+        )
+        comics.add(0, c)
         tick.value++
-        return Triple(exist, added, false)
+        return Triple(c, pages.size, true)
+    }
+
+    /** 把 pages 追加进 comic（按键去重）；sameChapter=false 时记一章新起点 */
+    private fun mergePages(
+        comic: Comic,
+        pages: List<String>,
+        sameChapter: Boolean,
+        chapterName: String = ""
+    ): Int {
+        val have = comic.pages.map { it.substringBefore('?') }.toMutableSet()
+        val fresh = pages.filter { have.add(it.substringBefore('?')) }
+        if (fresh.isEmpty()) return 0
+        if (!sameChapter) {
+            comic.chapterMarks.add(comic.pages.size)
+            comic.chapterNames.add(chapterName)
+        }
+        comic.pages.addAll(fresh)
+        if (comic.chapterMarks.isEmpty()) comic.chapterMarks.add(0)
+        if (comic.chapterNames.isEmpty()) comic.chapterNames.add(comic.title)
+        comic.updatedAt = System.currentTimeMillis()
+        tick.value++
+        return fresh.size
+    }
+
+    /** 老数据迁移：补 seriesKey，并把同系列的多册并成一册（只在 load 后跑一次） */
+    fun rebuildSeries() {
+        // 每次都重算：规则改了（比如新增「剥掉纯数字尾巴」）老数据才会跟着归并
+        comics.forEach { c -> c.seriesKey = seriesKeyOf(c.title, c.sourceUrl) }
+        val groups = comics.filter { it.seriesKey.isNotEmpty() }.groupBy { it.seriesKey }
+        var merged = 0
+        groups.forEach { (_, list) ->
+            if (list.size < 2) return@forEach
+            val keep = list.minByOrNull { it.addedAt } ?: return@forEach
+            list.filter { it.id != keep.id }.forEach { other ->
+                if (other.pages.isNotEmpty()) {
+                    mergePages(keep, other.pages, sameChapter = false, chapterName = other.title)
+                }
+                if (keep.cover.isBlank()) keep.cover = other.cover
+                if (keep.author.isBlank()) keep.author = other.author
+                File(comicDir, other.id).deleteRecursively()
+                comics.removeAll { it.id == other.id }
+                merged++
+            }
+        }
+        if (merged > 0) {
+            tick.value++
+            save()
+        }
     }
 
     fun removeComic(id: String) {
