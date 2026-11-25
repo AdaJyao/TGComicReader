@@ -69,8 +69,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         lib = Library(applicationContext)
         lib.load()
-        // 老数据补 seriesKey，并把同一系列的多册并成一册
-        runCatching { lib.rebuildSeries() }
+        // 注意：启动时不再自动整理书架——合并/清重只在用户点「整理」时执行
         prefs = Prefs(applicationContext)
         EhApi.setSlowMode(prefs.ehSlow)
 
@@ -499,12 +498,14 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun confirmImport(items: List<Parsed>) {
-        // 先做一次冲突检测：和书架里已有的重复就先问用户，别自作主张
-        items.forEachIndexed { i, p ->
+        // 单条导入才问「发现重复」；批量导入/从链接一键恢复一律静默合并，
+        // 免得恢复 50 条链接时要连点 50 次弹窗（整理交给手动）
+        if (items.size == 1) {
+            val p = items.first()
             val ex = runCatching { lib.findConflict(p.title, p.url, p.images, p.cover) }.getOrNull()
             if (ex != null) {
                 importState = ImportState.Idle
-                conflict = ImportConflict(p, ex, items.drop(i + 1))
+                conflict = ImportConflict(p, ex, emptyList())
                 return
             }
         }
@@ -525,10 +526,13 @@ class MainActivity : ComponentActivity() {
             importState = ImportState.Idle
             clipLinks = emptyList()
             dismissedClipKey = items.joinToString("|") { it.url }
+            // 导入只按标题补页，不做任何系列归并；有可并的组就提示一句，让用户自己决定
+            val pending = runCatching { lib.planOrganize(true, false).seriesGroups.size }.getOrDefault(0)
+            val tip = if (pending > 0) " · 有 $pending 组同系列可整理" else ""
             message = when {
-                created > 0 && merged > 0 -> "新增 $created 册，另合并 $merged 页"
-                created > 0 -> "已加入书架：$created 册"
-                merged > 0 -> "已合并 $merged 页进原有册"
+                created > 0 && merged > 0 -> "新增 $created 册，另合并 $merged 页$tip"
+                created > 0 -> "已加入书架：$created 册$tip"
+                merged > 0 -> "已合并 $merged 页进原有册$tip"
                 else -> "这些页面已在书架里"
             }
         }

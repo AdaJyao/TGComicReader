@@ -50,12 +50,18 @@ object Titles {
     private val zhPageSuffix = Regex("""\s*[-–—]?\s*第\s*\d+\s*[页頁]\s*$""")
     private val noise = Regex("""\s*[–—-]\s*Telegraph\s*$""", RegexOption.IGNORE_CASE)
 
+    /** 上/中/下、前篇/后篇——必须最先剥，否则「第3话 上」的章节尾巴不在行尾会剥不掉 */
+    private val partTail = Regex(
+        """[\s\-_·:：]*(?:上|中|下|前篇|中篇|后篇|前編|中編|後編|后編|前编|后编|上篇|下篇)\s*$""",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
      * 章节尾巴：「第3话 / 第3話 / 第三话 / 第12章 / Ch.3 / Chapter 3 / Vol.2 / (3) / 3話」
      * 命中就剥掉，剩下的当系列名——这样「XXX 第1话」「XXX 第2话」会归到同一册。
      */
     private val chapterTail = Regex(
-        """[\s\-_–—·:：]*[\(\[（【]?\s*(?:第\s*[0-9一二三四五六七八九十百]+\s*[话話章卷集部篇回]|ch(?:apter)?\.?\s*\d+|ep(?:isode)?\.?\s*\d+|vol(?:ume)?\.?\s*\d+|\d+\s*[话話章卷])\s*[\)\]）】]?\s*$""",
+        """[\s\-_–—·:：]*[\(\[（【]?\s*(?:第\s*[0-9一二三四五六七八九十百]+(?:\s*[话話章卷集部篇回])|ch(?:apter)?\.?\s*\d+|ep(?:isode)?\.?\s*\d+|vol(?:ume)?\.?\s*\d+|\d+\s*[话話章卷])\s*[\)\]）】]?\s*$""",
         RegexOption.IGNORE_CASE
     )
 
@@ -64,10 +70,38 @@ object Titles {
         """[\s\-_–—·:：,，]*(?:[\(\[（【]?\s*\d{1,4}\s*[\)\]）】]?)\s*$"""
     )
 
-    /** 系列名：连续剥两次，兼容「XXX 第3话 上」这种；最后再剥掉纯数字尾巴 */
+    /** 全角 → 半角（数字/字母/空格），否则「１２」和「12」会被当成两册 */
+    private fun halfWidth(raw: String): String {
+        val sb = StringBuilder(raw.length)
+        for (ch in raw) {
+            sb.append(
+                when {
+                    ch in '０'..'９' -> '0' + (ch - '０')
+                    ch in 'Ａ'..'Ｚ' -> 'A' + (ch - 'Ａ')
+                    ch in 'ａ'..'ｚ' -> 'a' + (ch - 'ａ')
+                    ch == '　' -> ' '
+                    else -> ch
+                }
+            )
+        }
+        return sb.toString()
+    }
+
+    /** 去掉 " - Page 1" 之类的页码尾巴，用于把同一册的多页帖子合并 */
+    fun normalize(raw: String): String {
+        var t = halfWidth(raw.trim())
+        t = noise.replace(t, "")
+        t = pageSuffix.replace(t, "")
+        t = zhPageSuffix.replace(t, "")
+        return t.trim()
+    }
+
+    /** 系列名：先剥「上/中/下」，再剥章节尾巴，最后剥纯数字尾巴 */
     fun series(raw: String): String {
         var t = raw.trim()
         repeat(2) {
+            val p = partTail.replace(t, "").trim()
+            if (p.isNotBlank()) t = p
             val n = chapterTail.replace(t, "").trim()
             if (n.isNotBlank()) t = n
         }
@@ -76,14 +110,77 @@ object Titles {
         return t.trim().trimEnd('-', '_', '·', ':', '：').trim()
     }
 
-    /** 去掉 " - Page 1" 之类的页码尾巴，用于把同一册的多页帖子合并 */
-    fun normalize(raw: String): String {
-        var t = raw.trim()
-        t = noise.replace(t, "")
-        t = pageSuffix.replace(t, "")
-        t = zhPageSuffix.replace(t, "")
-        return t.trim()
+    /**
+     * 查重用的标题键：忽略大小写、空白、全半角、页码尾巴、首尾标点，
+     * 并把「第01话 / Ch.05」里的前导零抹掉——**只看标题，不看来源链接**。
+     */
+    fun titleKey(raw: String): String {
+        var t = normalize(raw).lowercase()
+        t = t.replace(Regex("""[\s\u3000]+"""), "")
+        t = t.replace(Regex("""[_*~`'"“”‘’]"""), "")
+        t = t.replace(Regex("""[()\[\]（）【】《》]"""), "")
+        t = Regex("""(第|ch|chapter|ep|episode|vol|volume|#)\.?\s*0*(\d+)""", RegexOption.IGNORE_CASE)
+            .replace(t, "$1$2")
+        return t.trimEnd('。', '.', '!', '！', '?', '？', '·', '：', ':', '-', '_', ',', '，', '、')
     }
+
+    private val cnDigit = mapOf(
+        '零' to 0, '〇' to 0, '一' to 1, '二' to 2, '两' to 2, '三' to 3, '四' to 4,
+        '五' to 5, '六' to 6, '七' to 7, '八' to 8, '九' to 9
+    )
+
+    /** 中文数字：十二 → 12、二十三 → 23、一百 → 100 */
+    private fun cnNumber(s: String): Int? {
+        if (s.isBlank()) return null
+        if (s.all { it.isDigit() }) return s.toIntOrNull()
+        var total = 0
+        var cur = 0
+        var seen = false
+        for (ch in s) {
+            when {
+                cnDigit.containsKey(ch) -> { cur = cnDigit.getValue(ch); seen = true }
+                ch == '十' -> { total += (if (cur == 0) 1 else cur) * 10; cur = 0; seen = true }
+                ch == '百' -> { total += (if (cur == 0) 1 else cur) * 100; cur = 0; seen = true }
+                else -> return null
+            }
+        }
+        return if (seen) total + cur else null
+    }
+
+    private val cnTail = Regex("""第\s*([0-9]+|[零〇一二三四五六七八九十百两]+)\s*[话話章卷集部篇回]""")
+    private val latinTail = Regex(
+        """(?:^|[\s\-_·:：\[\(【])(?:ch|chapter|ep|episode|vol|volume|#)\.?\s*(\d{1,4})""",
+        RegexOption.IGNORE_CASE
+    )
+    private val plainTail = Regex(
+        """[\s\-_–—·:：,，]*(?:[\(\[（【]?\s*(\d{1,4})\s*[\)\]）】]?)\s*$"""
+    )
+
+    /** 标题里带的序号：「第3话 / Ch.3 / Vol.2 / 03」→ 3、3、2、3；认不出来返回 null */
+    fun chapterNo(raw: String): Int? {
+        val t = normalize(raw)
+        cnTail.find(t)?.let { m -> cnNumber(m.groupValues[1])?.takeIf { it > 0 }?.let { return it } }
+        latinTail.find(t)?.let { m -> m.groupValues[1].toIntOrNull()?.takeIf { it > 0 }?.let { return it } }
+        plainTail.find(t)?.let { m -> m.groupValues[1].toIntOrNull()?.takeIf { it > 0 }?.let { return it } }
+        return null
+    }
+
+    /** 上/中/下 → 1/2/3（配合「第3话 上 / 第3话 下」这类拆分） */
+    fun chapterPart(raw: String): Int {
+        val t = normalize(raw)
+        return when {
+            Regex("""(?:^|[\s\-_·:：])(?:上|上篇|前篇|前編|前编|part\s*1)""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(t) -> 1
+            Regex("""(?:^|[\s\-_·:：])(?:中|中篇|中編|中编|part\s*2)""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(t) -> 2
+            Regex("""(?:^|[\s\-_·:：])(?:下|下篇|后篇|後篇|后編|後編|part\s*3)""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(t) -> 3
+            else -> 0
+        }
+    }
+
+    /** 章节排序键：序号 ×10 + 上中下；没有序号的排在组首（当作整册/第 0 话） */
+    fun chapterOrder(raw: String): Long = (chapterNo(raw) ?: 0).toLong() * 10L + chapterPart(raw)
 }
 
 private fun md5(s: String): String {
@@ -348,76 +445,100 @@ class Library(private val ctx: Context) {
         }
     }
 
-    /** 站点名（host 去掉 www.），用于「同站同名才算一个系列」 */
-    private fun hostOf(url: String): String =
-        url.substringAfter("://", "").substringBefore('/').lowercase().removePrefix("www.")
+    /**
+     * 系列键：**只由标题决定**（去掉「第N话 / Ch.N / 上中下」后的系列名），
+     * 来源链接完全不参与——所以同一部作品从不同站点导入也能按序号并到一起。
+     */
+    fun seriesKeyOf(title: String, url: String = ""): String =
+        Titles.titleKey(Titles.series(Titles.normalize(title)))
 
-    /** 系列键：站点 + 归一化系列名 */
-    fun seriesKeyOf(title: String, url: String): String {
-        val host = hostOf(url)
-        val series = Titles.series(Titles.normalize(title))
-        if (series.isBlank()) return ""
-        return host + "|" + series.lowercase()
-    }
-
-    /** 同标题（同一册的分页帖子） */
+    /** 同标题（同一册的分页帖子 / 同一部作品重复收录） */
     fun findSameVolume(title: String): Comic? {
-        val n = Titles.normalize(title)
-        if (n.isBlank()) return null
-        return comics.firstOrNull { Titles.normalize(it.title).equals(n, ignoreCase = true) }
+        val k = Titles.titleKey(title)
+        if (k.isBlank()) return null
+        return comics.firstOrNull { Titles.titleKey(it.title) == k }
     }
 
     /** 同一系列的已有册子 */
-    fun findSameSeries(title: String, url: String): Comic? {
+    fun findSameSeries(title: String, url: String = ""): Comic? {
         val key = seriesKeyOf(title, url)
         if (key.isBlank()) return null
         return comics.firstOrNull { it.seriesKey.isNotEmpty() && it.seriesKey == key }
-            ?: comics.firstOrNull { seriesKeyOf(it.title, it.sourceUrl) == key }
+            ?: comics.firstOrNull { seriesKeyOf(it.title) == key }
     }
 
     /**
-     * 多维查重（严格版）。telegra.ph 这类文章页经常共用第一张图/同一套模板，
-     * 所以「同首图」不再单独算重复，必须再叠一层「页面有实质重合」。
+     * 查重：**只看标题**。
      *
-     *   1. 同一来源页（host + /album/123、/g/123、/photo/123 这类 id 相同）
-     *   2. 页数相同 + 页面重合度 ≥ 90%（且至少 3 页）
-     *   3. 页数相同 + 首图相同 + 页面重合度 ≥ 50%
+     * 之前拿页面重合度/来源 id 判定，telegra.ph 的文章页共用模板和首图，
+     * 结果把不是同一部作品的两册判成重复，反过来同一个标题换个链接又重复收录。
+     * 现在标题归一化（忽略大小写/空白/全半角/页码尾巴/前导零）后完全相同才算重复。
      */
     fun findDuplicate(title: String, url: String, pages: List<String>, cover: String): Comic? {
-        val urlKey = canonicalUrlKey(url)
-        comics.firstOrNull { canonicalUrlKey(it.sourceUrl) == urlKey }?.let { return it }
-
-        if (pages.size < 3) return null
-        val incoming = pages.map { it.substringBefore('?') }.toSet()
-        comics.firstOrNull { c ->
-            if (c.pages.size != incoming.size) return@firstOrNull false
-            val mine = c.pages.map { it.substringBefore('?') }.toSet()
-            val inter = mine.count { it in incoming }
-            inter.toDouble() / incoming.size >= 0.9
-        }?.let { return it }
-
-        val first = pages.firstOrNull()?.substringBefore('?') ?: return null
-        comics.firstOrNull { c ->
-            if (c.pages.size != incoming.size) return@firstOrNull false
-            val theirFirst = c.pages.firstOrNull()?.substringBefore('?') ?: return@firstOrNull false
-            if (theirFirst != first) return@firstOrNull false
-            val mine = c.pages.map { it.substringBefore('?') }.toSet()
-            val inter = mine.count { it in incoming }
-            inter.toDouble() / incoming.size >= 0.5
-        }?.let { return it }
-        return null
+        val k = Titles.titleKey(title)
+        if (k.isBlank()) return null
+        return comics.firstOrNull { Titles.titleKey(it.title) == k }
     }
 
-    /** 导入前先问一句：这册是不已经收过（用于弹「保留哪个」的对话框） */
-    fun findConflict(title: String, url: String, pages: List<String>, cover: String): Comic? =
-        findDuplicate(title, url, pages, cover)
+    /**
+     * 导入前是否要弹「发现重复」让用户选：
+     * 标题相同、且两边的页面不是同一份（已有那册没包含这次的页、重合度也不高）才问。
+     */
+    fun findConflict(title: String, url: String, pages: List<String>, cover: String): Comic? {
+        val exist = findDuplicate(title, url, pages, cover) ?: return null
+        if (pages.isEmpty()) return null
+        val mine = exist.pages.map { it.substringBefore('?') }.toSet()
+        val theirs = pages.map { it.substringBefore('?') }
+        if (theirs.all { it in mine }) return null
+        val inter = theirs.count { it in mine }
+        if (inter.toDouble() / theirs.size >= 0.9) return null
+        return exist
+    }
 
     /** 用户选择「合并进原来那册」 */
     fun mergeInto(existingId: String, title: String, pages: List<String>): Int {
         val c = comics.firstOrNull { it.id == existingId } ?: return 0
         val added = mergePages(c, pages, sameChapter = false, chapterName = title)
+        if (added > 0) reorderChaptersOf(c)
         save()
         return added
+    }
+
+    /**
+     * 把已合并的多话册内部按标题序号重排。
+     *
+     * 老版本按钮是「按加入时间」排的，导入顺序乱就会得到「第2话 在 第1话 前面」；
+     * 这里用已有的 chapterMarks 切段、按序号稳定排序后重新拼回去。
+     * @return 是否真的动过
+     */
+    private fun reorderChaptersOf(c: Comic): Boolean {
+        val n = c.pages.size
+        if (n == 0 || c.chapterMarks.size < 2) return false
+        val bounds = c.chapterMarks.filter { it in 0 until n }.distinct().sorted().toMutableList()
+        if (bounds.isEmpty()) return false
+        if (bounds.first() != 0) bounds.add(0, 0)
+        val segments = ArrayList<Pair<String, List<String>>>()
+        for (i in bounds.indices) {
+            val from = bounds[i]
+            val to = if (i + 1 < bounds.size) bounds[i + 1] else n
+            if (to <= from) continue
+            val name = c.chapterNames.getOrNull(i)?.takeIf { it.isNotBlank() } ?: "第 ${i + 1} 话"
+            segments += name to c.pages.subList(from, to).toList()
+        }
+        if (segments.size < 2) return false
+        // sortedWith 是稳定排序：序号一样的保持原来的先后，不会乱动
+        val ordered = segments.sortedBy { Titles.chapterOrder(it.first) }
+        if (ordered.map { it.first } == segments.map { it.first }) return false
+        c.pages.clear()
+        c.chapterMarks.clear()
+        c.chapterMarks.add(0)
+        c.chapterNames.clear()
+        ordered.forEachIndexed { i, (name, pages) ->
+            if (i > 0) c.chapterMarks.add(c.pages.size)
+            c.chapterNames.add(name)
+            c.pages.addAll(pages)
+        }
+        return true
     }
 
     /** 用户选择「用新导入替换旧的」 */
@@ -466,18 +587,14 @@ class Library(private val ctx: Context) {
         return c
     }
 
-    private fun canonicalUrlKey(url: String): String {
-        val u = url.trim().substringBefore('#').substringBefore('?').trimEnd('/')
-        val host = hostOf(u)
-        val path = u.substringAfter("://", "").substringAfter('/', "")
-        // 只要路径里的数字 id：/album/123/标题、/g/123456/abc → album/123、g/123456
-        val m = Regex("""(album|g|photo|photos-index-aid|comic|manga|title|book)[^0-9]{0,4}(\d+)""")
-            .find(path)
-        return if (m != null) host + "|" + m.groupValues[1] + "|" + m.groupValues[2]
-        else host + "|" + path.lowercase()
-    }
-
-    /** 返回 (comic, 新增页数, 是否新建) */
+    /**
+     * 导入一条解析结果。
+     *
+     * 规则（对应用户要求）：
+     *   · 标题相同 → 当作同一册，只把缺的页补进去，**不新建**
+     *   · 其它情况一律新建一册，**绝不自动归并系列**——合并只在用户手动「整理」时做
+     * 这样「第一次从链接批量恢复」得到的就是忠实的一册一条，之后再整理。
+     */
     fun upsert(
         title: String,
         url: String,
@@ -485,38 +602,25 @@ class Library(private val ctx: Context) {
         author: String,
         cover: String = ""
     ): Triple<Comic, Int, Boolean> {
-        // ① 同一册（标题完全一致）：只补页
-        findSameVolume(title)?.let { exist ->
+        val clean = Titles.normalize(title).ifBlank { "未命名" }
+        findSameVolume(clean)?.let { exist ->
             val added = mergePages(exist, pages, sameChapter = true)
-            if (exist.author.isBlank() && author.isNotBlank()) exist.author = author
-            if (exist.cover.isBlank() && cover.isNotBlank()) exist.cover = cover
-            val stripped = Titles.normalize(exist.title)
-            if (stripped.isNotBlank() && stripped != exist.title) exist.title = stripped
-            return Triple(exist, added, false)
-        }
-        // ② 已收过（多维查重）：直接返回，不新增
-        findDuplicate(title, url, pages, cover)?.let { return Triple(it, 0, false) }
-        // ③ 同系列的其它话：并进已有那一册，记一条章节起点
-        findSameSeries(title, url)?.let { exist ->
-            val added = mergePages(exist, pages, sameChapter = false, chapterName = title)
             if (exist.author.isBlank() && author.isNotBlank()) exist.author = author
             if (exist.cover.isBlank() && cover.isNotBlank()) exist.cover = cover
             exist.updatedAt = System.currentTimeMillis()
             tick.value++
             return Triple(exist, added, false)
         }
-        // ④ 新的一册
-        val key = seriesKeyOf(title, url)
         val c = Comic(
             id = comicIdOf(url),
-            title = title,
+            title = clean,
             sourceUrl = url,
             pages = mutableStateListOf<String>().also { it.addAll(pages) },
             author = author,
             cover = cover,
-            seriesKey = key,
+            seriesKey = seriesKeyOf(clean),
             chapterMarks = mutableStateListOf(0),
-            chapterNames = mutableStateListOf(title)
+            chapterNames = mutableStateListOf(clean)
         )
         comics.add(0, c)
         tick.value++
@@ -552,7 +656,7 @@ class Library(private val ctx: Context) {
         val ids: List<String>,
         val title: String,
         val totalPages: Int,
-        val chapters: List<Pair<String, Int>>   // 章节名 → 页数
+        val chapters: List<Pair<String, Int>>   // 章节名 → 页数（已按标题序号排好）
     )
 
     /** 整理前的预览：哪些册会被并成一组 / 哪些算重复 */
@@ -563,76 +667,100 @@ class Library(private val ctx: Context) {
         val after: Int
     )
 
-    /** 合并预览：按加入时间排，最早的那册当主册 */
-    fun previewMerge(ids: Collection<String>): MergePlan? {
-        val list = ids.mapNotNull { id -> comics.firstOrNull { it.id == id } }
-            .sortedBy { it.addedAt }
+    /** 组内排序：标题里的序号升序（第2话 在 第10话 前面），序号相同再按加入时间 */
+    private fun chapterSorted(list: List<Comic>): List<Comic> =
+        list.sortedWith(compareBy({ Titles.chapterOrder(it.title) }, { it.addedAt }))
+
+    /** 合并后的书名：取组内最靠前那册的系列名（去掉「第N话」），剥不出来就用它自己的标题 */
+    private fun mergedTitleOf(sorted: List<Comic>): String {
+        val first = sorted.firstOrNull() ?: return ""
+        val series = Titles.series(Titles.normalize(first.title))
+        return series.ifBlank { first.title }
+    }
+
+    private fun mergePlanOf(list: List<Comic>): MergePlan? {
         if (list.size < 2) return null
-        val chapters = list.map { c -> (Titles.series(c.title).ifBlank { c.title }) to c.pages.size }
+        val sorted = chapterSorted(list)
         return MergePlan(
-            ids = list.map { it.id },
-            title = list.first().title,
-            totalPages = list.sumOf { it.pages.size },
-            chapters = chapters
+            ids = sorted.map { it.id },
+            title = mergedTitleOf(sorted),
+            totalPages = sorted.sumOf { it.pages.size },
+            chapters = sorted.map { c -> c.title to c.pages.size }
         )
     }
 
-    /** 手动合并：早的留名，其余按时间顺序并进去（各算一章） */
+    /** 合并预览：按标题里的序号排，序号最小的那册当主册 */
+    fun previewMerge(ids: Collection<String>): MergePlan? =
+        mergePlanOf(ids.mapNotNull { id -> comics.firstOrNull { it.id == id } })
+
+    /** 手动合并：按序号升序拼接，各算一章 */
     fun mergeComics(ids: Collection<String>, title: String? = null): Comic? {
         val plan = previewMerge(ids) ?: return null
         snapshot()
         val keep = comics.firstOrNull { it.id == plan.ids.first() } ?: return null
-        if (!title.isNullOrBlank()) keep.title = title.trim()
+        keep.title = title?.takeIf { it.isNotBlank() }?.trim() ?: plan.title
         plan.ids.drop(1).forEach { id ->
             val other = comics.firstOrNull { it.id == id } ?: return@forEach
             mergePages(keep, other.pages, sameChapter = false, chapterName = other.title)
             if (keep.cover.isBlank()) keep.cover = other.cover
             if (keep.author.isBlank()) keep.author = other.author
+            if (other.favorite) keep.favorite = true
+            if (other.lastIndex > keep.lastIndex) keep.lastIndex = other.lastIndex
             dropCache(other.id)
             comics.removeAll { it.id == other.id }
         }
-        // 合并后系列名统一
-        keep.seriesKey = seriesKeyOf(keep.title, keep.sourceUrl)
+        // 合并后系列名按新标题重算
+        keep.seriesKey = seriesKeyOf(keep.title)
+        reorderChaptersOf(keep)
         tick.value++
         save()
         return keep
     }
 
-    /** 只算不改：整理会做哪些事 */
+    /**
+     * 只算不改：整理会做哪些事。
+     *
+     * ① 清重：**标题完全相同**的归一组，只留页数最多的一册（页数相同留早的）
+     * ② 并系列：同一系列名的多话，按标题里的序号升序拼成一册
+     * 两步都是模拟计算，保证预览和真正的整理结果一致。
+     */
     fun planOrganize(mergeSameSeries: Boolean, removeDuplicates: Boolean): OrganizePlan {
-        val keys = comics.associate { it.id to seriesKeyOf(it.title, it.sourceUrl) }
-        val seriesGroups = ArrayList<MergePlan>()
-        if (mergeSameSeries) {
-            comics.groupBy { keys[it.id].orEmpty() }
-                .filterKeys { it.isNotEmpty() }
-                .forEach { (_, list) ->
-                    if (list.size >= 2) {
-                        previewMerge(list.map { it.id })?.let { seriesGroups += it }
-                    }
-                }
-        }
-        val dups = ArrayList<Pair<Comic, Comic>>()
+        val before = comics.size
+
+        // ① 清重（模拟）
+        val dupPairs = ArrayList<Pair<Comic, Comic>>()
+        val dropped = HashSet<String>()
         if (removeDuplicates) {
-            var i = 0
-            val removed = HashSet<String>()
-            while (i < comics.size) {
-                var j = i + 1
-                while (j < comics.size) {
-                    val a = comics[i]; val b = comics[j]
-                    if (a.id !in removed && b.id !in removed && isDuplicatePair(a, b)) {
-                        dups += a to b
-                        removed += b.id
+            comics.groupBy { Titles.titleKey(it.title) }
+                .filterKeys { it.isNotBlank() }
+                .forEach { (_, list) ->
+                    if (list.size < 2) return@forEach
+                    val keep = list.sortedWith(
+                        compareByDescending<Comic> { it.pages.size }.thenBy { it.addedAt }
+                    ).first()
+                    list.filter { it.id != keep.id }.forEach { drop ->
+                        if (dropped.add(drop.id)) dupPairs += keep to drop
                     }
-                    j++
                 }
-                i++
-            }
         }
-        val after = comics.size -
-            dups.size -
-            seriesGroups.sumOf { g -> (g.ids.size - 1).coerceAtLeast(0) } +
-            dups.count { (a, b) -> seriesGroups.any { it.ids.contains(a.id) && it.ids.contains(b.id) } }
-        return OrganizePlan(seriesGroups, dups, comics.size, after.coerceAtMost(comics.size))
+
+        // ② 并系列（在清重后的列表上模拟）
+        val alive = comics.filter { it.id !in dropped }
+        val groups = ArrayList<MergePlan>()
+        if (mergeSameSeries) {
+            alive.groupBy { seriesKeyOf(it.title) }
+                .filterKeys { it.isNotBlank() }
+                .forEach { (_, list) ->
+                    // 组里全是同名（只差大小写/空白）的那是重复，交给清重，不算系列
+                    val distinctTitles = list.map { Titles.titleKey(it.title) }.toSet()
+                    if (list.size >= 2 && distinctTitles.size >= 2) {
+                        mergePlanOf(list)?.let { groups += it }
+                    }
+                }
+        }
+
+        val after = alive.size - groups.sumOf { (it.ids.size - 1).coerceAtLeast(0) }
+        return OrganizePlan(groups, dupPairs, before, after.coerceAtLeast(0))
     }
 
     // ---- 撤销：操作前存一份快照，整理/合并后可以一键还原 ----
@@ -728,92 +856,73 @@ class Library(private val ctx: Context) {
     )
 
     /**
-     * 整理书架：
-     *   · 重算 seriesKey，把同一系列的多册并成一册（保留章节起点）
-     *   · removeDuplicates=true 时再按多维规则清掉重复册（保留页数多的那本）
+     * 整理书架（**只在用户手动触发时执行**，启动/导入都不会自动跑）：
+     *   ① removeDuplicates：标题相同的只留页数最多的一册，页集合合并进来
+     *   ② mergeSameSeries：同系列的多话按标题序号升序拼成一册，第 1 话当主册
      */
     fun organize(removeDuplicates: Boolean = true, mergeSameSeries: Boolean = true): OrganizeReport {
+        // 空操作就别留快照，免得「撤销」把无关的更早状态翻出来
+        val plan = planOrganize(mergeSameSeries, removeDuplicates)
+        if (plan.duplicatePairs.isEmpty() && plan.seriesGroups.isEmpty()) {
+            return OrganizeReport(comics.size, comics.size, 0, 0)
+        }
         snapshot()
         val before = comics.size
-        // 每次都重算：规则改了（比如新增「剥掉纯数字尾巴」）老数据才会跟着归并
-        comics.forEach { c -> c.seriesKey = seriesKeyOf(c.title, c.sourceUrl) }
+        // 规则可能变过，先按当前规则重算一遍系列键
+        comics.forEach { c -> c.seriesKey = seriesKeyOf(c.title) }
 
+        // ① 清重：保留页数多的那册，另一册的页并进来（可能补上它缺的图）
         var dups = 0
-        if (removeDuplicates) {
-            var i = 0
-            while (i < comics.size) {
-                var j = i + 1
-                var restarted = false
-                while (j < comics.size) {
-                    val a = comics[i]
-                    val b = comics[j]
-                    if (isDuplicatePair(a, b)) {
-                        val keep = if (a.pages.size >= b.pages.size) a else b
-                        val drop = if (keep.id == a.id) b else a
-                        runCatching { mergePages(keep, drop.pages, sameChapter = true) }
-                        if (keep.cover.isBlank()) keep.cover = drop.cover
-                        if (keep.author.isBlank()) keep.author = drop.author
-                        dropCache(drop.id)
-                        comics.remove(drop)
-                        dups++
-                        restarted = true
-                        break
-                    }
-                    j++
-                }
-                if (!restarted) i++
+        plan.duplicatePairs.forEach { (keep, drop) ->
+            if (drop.pages.isNotEmpty()) {
+                runCatching { mergePages(keep, drop.pages, sameChapter = true) }
             }
+            if (keep.cover.isBlank()) keep.cover = drop.cover
+            if (keep.author.isBlank()) keep.author = drop.author
+            if (drop.favorite) keep.favorite = true
+            if (drop.lastIndex > keep.lastIndex) keep.lastIndex = drop.lastIndex
+            dropCache(drop.id)
+            comics.removeAll { it.id == drop.id }
+            dups++
         }
 
+        // ② 并系列：按序号升序，序号最小的那册当主册，书名剥成系列名
         var merged = 0
-        val groups = if (mergeSameSeries) comics.filter { it.seriesKey.isNotEmpty() }.groupBy { it.seriesKey }
-        else emptyMap()
-        groups.forEach { (_, list) ->
-            if (list.size < 2) return@forEach
-            val keep = list.minByOrNull { it.addedAt } ?: return@forEach
-            list.filter { it.id != keep.id }.forEach { other ->
+        plan.seriesGroups.forEach { g ->
+            val list = g.ids.mapNotNull { id -> comics.firstOrNull { it.id == id } }
+            val keep = list.firstOrNull() ?: return@forEach
+            list.drop(1).forEach { other ->
+                // 页完全相同就没什么可并的，跳过（避免留下空章节）
                 if (other.pages.isNotEmpty()) {
                     mergePages(keep, other.pages, sameChapter = false, chapterName = other.title)
                 }
                 if (keep.cover.isBlank()) keep.cover = other.cover
                 if (keep.author.isBlank()) keep.author = other.author
+                if (other.favorite) keep.favorite = true
+                if (other.lastIndex > keep.lastIndex) keep.lastIndex = other.lastIndex
                 dropCache(other.id)
                 comics.removeAll { it.id == other.id }
                 merged++
             }
+            keep.title = Titles.series(Titles.normalize(keep.title)).ifBlank { keep.title }
+            keep.seriesKey = seriesKeyOf(keep.title)
+            reorderChaptersOf(keep)
+        }
+
+        // 已合并过的老数据也可能是乱序的，顺手按序号捋一遍
+        var reordered = 0
+        if (mergeSameSeries) {
+            comics.forEach { if (runCatching { reorderChaptersOf(it) }.getOrDefault(false)) reordered++ }
         }
 
         tick.value++
-        if (merged > 0 || dups > 0) save()
+        if (merged > 0 || dups > 0 || reordered > 0) save()
         return OrganizeReport(before, comics.size, merged, dups)
     }
 
     /** UI 用：两个开关各管一件事 */
     fun organizeWith(mergeSameSeries: Boolean, removeDuplicates: Boolean): OrganizeReport =
         organize(removeDuplicates = removeDuplicates, mergeSameSeries = mergeSameSeries)
-
-    /** 启动时的轻量版本：只归并同系列，不删重复（避免静默删书） */
-    fun rebuildSeries() {
-        val r = organize(removeDuplicates = false)
-        if (r.seriesMerged > 0) save()
-    }
-
-    /** 两册是否重复（与导入时的判定保持一致） */
-    private fun isDuplicatePair(a: Comic, b: Comic): Boolean {
-        if (a.id == b.id) return false
-        val ka = canonicalUrlKey(a.sourceUrl)
-        val kb = canonicalUrlKey(b.sourceUrl)
-        if (ka.isNotBlank() && ka == kb) return true
-
-        val pa = a.pages.map { it.substringBefore('?') }
-        val pb = b.pages.map { it.substringBefore('?') }
-        if (pa.size < 3 || pa.size != pb.size) return false
-        val sa = pa.toSet()
-        val inter = pb.count { it in sa }
-        if (inter.toDouble() / pa.size >= 0.9) return true
-        if (pa.first() == pb.first() && inter.toDouble() / pa.size >= 0.5) return true
-        return false
-    }
 
     private fun dropCache(id: String) {
         runCatching { File(comicDir, id).deleteRecursively() }
@@ -870,7 +979,9 @@ class Library(private val ctx: Context) {
             for (j in 0 until pa.length()) pages.add(pa.getString(j))
             val title = o.optString("title", "未命名")
             val cover = o.optString("cover", "")
-            val exist = comics.firstOrNull { it.sourceUrl == url }
+            // 按标题判重（链接不参与）：同名就当作同一册，缺的页补上
+            val tk = Titles.titleKey(title)
+            val exist = if (tk.isBlank()) null else comics.firstOrNull { Titles.titleKey(it.title) == tk }
             if (exist == null) {
                 comics.add(
                     Comic(

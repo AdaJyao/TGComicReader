@@ -321,7 +321,7 @@ fun SettingsScreen(
                             SettingRow(
                                 "整理书架",
                                 value = if (organizing) "整理中…" else "${lib.comics.size} 册",
-                                subtitle = "同一系列的多个话并成一册；重复收录的只留页数最多的那本",
+                                subtitle = "同系列多话按序号升序并成一册；标题相同的重复只留页数最多的那本（仅手动触发）",
                                 onClick = {
                                     if (!organizing) {
                                         organizing = true

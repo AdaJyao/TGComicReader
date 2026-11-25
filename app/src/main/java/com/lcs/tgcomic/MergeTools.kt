@@ -69,11 +69,11 @@ fun OrganizeSheet(lib: Library, onClose: () -> Unit, onToast: (String) -> Unit) 
                 .heightIn(max = 320.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            ToggleRow("合并同一系列", "把同一作品的不同话/卷并成一册（保留章节）", mergeSame) {
+            ToggleRow("合并同一系列", "同名的多话按标题序号（第1话、第2话…）升序拼成一册", mergeSame) {
                 mergeSame = it
                 report = null
             }
-            ToggleRow("清理重复册", "同一来源或页面几乎重合的只留页数多的那本", removeDups) {
+            ToggleRow("清理重复册", "标题相同就算重复，只留页数最多的那册（页数相同留早的）", removeDups) {
                 removeDups = it
                 report = null
             }
@@ -105,6 +105,13 @@ fun OrganizeSheet(lib: Library, onClose: () -> Unit, onToast: (String) -> Unit) 
                             "• ${g.title}：${g.chapters.size} 册 → ${g.totalPages} 页",
                             fontSize = 10.5.sp,
                             color = Glass.TextDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            "   按序：" + g.chapters.joinToString(" → ") { it.first },
+                            fontSize = 9.5.sp,
+                            color = Glass.TextTertiary,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -210,7 +217,7 @@ fun ManualMergeSheet(lib: Library, ids: Set<String>, onClose: () -> Unit, onToas
     GlassDialog(onDismiss = onClose) {
         Text("合并 ${plan.chapters.size} 册", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Glass.Text)
         Spacer(Modifier.height(3.dp))
-        Text("合并后用第一册的名字，其余按加入时间排成章节", fontSize = 10.5.sp, color = Glass.TextDim)
+        Text("按标题序号升序拼成章节，书名取系列名「${plan.title}」", fontSize = 10.5.sp, color = Glass.TextDim)
 
         Spacer(Modifier.height(10.dp))
         Column(
