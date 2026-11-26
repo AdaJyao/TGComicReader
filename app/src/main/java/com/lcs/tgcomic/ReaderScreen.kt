@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
+import coil.request.CachePolicy
 import coil.request.ImageRequest
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.runtime.mutableStateMapOf
@@ -158,6 +159,35 @@ fun ReaderScreen(
             if (i > last) break
             val u = comic.pages.getOrNull(i) ?: continue
             JmWarmer.warm(ctx, pageFileOf(ctx, comic.id, i), u, app.okHttp)
+        }
+    }
+
+    // telegra.ph / t.me 这类「一页一图、图在第三方图床」的书：预取后 3 页塞进 Coil 磁盘缓存。
+    // 只取字节不解码（size(2,2) + 关掉内存缓存），显示时直接读本地，滑过去不用等网络。
+    val textBook = remember(comic.id) {
+        val u = comic.sourceUrl.lowercase()
+        u.contains("telegra.ph") || u.contains("telegraph.ph") ||
+            u.contains("graph.org") || u.contains("t.me/")
+    }
+    LaunchedEffect(comic.id, current) {
+        if (!textBook) return@LaunchedEffect
+        val loader = runCatching { coil.Coil.imageLoader(ctx) }.getOrNull() ?: return@LaunchedEffect
+        for (d in intArrayOf(1, 2, 3)) {
+            val i = current + d
+            if (i > last) break
+            val u = comic.pages.getOrNull(i) ?: continue
+            if (u.isBlank() || JmScramble.parse(u) != null) continue
+            val f = pageFileOf(ctx, comic.id, i)
+            val model: Any = if (f.exists() && f.length() > 1024) f else u
+            runCatching {
+                loader.enqueue(
+                    ImageRequest.Builder(ctx)
+                        .data(model)
+                        .size(2, 2)
+                        .memoryCachePolicy(CachePolicy.DISABLED)
+                        .build()
+                )
+            }
         }
     }
 

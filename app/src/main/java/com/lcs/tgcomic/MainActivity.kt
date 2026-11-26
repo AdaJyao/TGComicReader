@@ -21,10 +21,15 @@ import androidx.core.content.ContextCompat
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -397,13 +402,21 @@ class MainActivity : ComponentActivity() {
         val entries = TelegraphParser.indexEntries(html, url, base.images.size)
         if (entries.isEmpty()) return listOf(expandTelegraph(base, html, url))
 
-        val out = mutableListOf<TelegraphParser.Article>()
-        for (e in entries.take(MAX_INDEX_ITEMS)) {
-            val art = runCatching { loadTelegraph(e.url) }.getOrNull() ?: continue
-            if (art.images.isEmpty()) continue
-            // 标题为空就用目录里的锚点文字
-            out.add(if (art.title.isBlank() || art.title == "未命名") art.copy(title = e.title) else art)
+        // 目录页可能有二十来篇：并发拉，别一篇一篇排队（海外站点单页 1~2 秒，串行能等到 30 秒开外）
+        val targets = entries.take(MAX_INDEX_ITEMS)
+        val sem = Semaphore(4)
+        val loaded = coroutineScope {
+            targets.mapIndexed { idx, e ->
+                async(Dispatchers.IO) {
+                    sem.withPermit {
+                        val art = runCatching { loadTelegraph(e.url) }.getOrNull()
+                        if (art == null || art.images.isEmpty()) null
+                        else idx to (if (art.title.isBlank() || art.title == "未命名") art.copy(title = e.title) else art)
+                    }
+                }
+            }.awaitAll()
         }
+        val out = loaded.filterNotNull().sortedBy { it.first }.map { it.second }
         if (out.isEmpty()) {
             throw IllegalStateException(
                 "这个 telegra.ph 页面是目录，但里面 ${entries.size} 篇文章都没取到图（链接可能已失效）"
