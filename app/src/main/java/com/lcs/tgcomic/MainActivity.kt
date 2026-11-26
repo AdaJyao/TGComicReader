@@ -35,6 +35,8 @@ class MainActivity : ComponentActivity() {
     private companion object {
         /** 一次导入最多处理多少个页面/画廊，防止列表页展开后跑飞 */
         const val MAX_BATCH_TARGETS = 60
+        /** 一个 telegra.ph 目录页最多展开多少篇 */
+        const val MAX_INDEX_ITEMS = 24
     }
 
     private lateinit var lib: Library
@@ -360,14 +362,64 @@ class MainActivity : ComponentActivity() {
         }.getOrDefault("")
     }
 
+    /** 抓 telegra.ph 页面，把 HTTP 错误翻成人话 */
+    private suspend fun fetchTelegraphHtml(url: String): String =
+        try {
+            Net.getText(url)
+        } catch (e: Exception) {
+            val m = e.message.orEmpty()
+            throw IllegalStateException(
+                when {
+                    m.contains("404") -> "页面不存在（404）——链接可能已被作者删除或改过"
+                    m.contains("403") -> "站点拒绝了这次访问（403），稍后再试或换个网络"
+                    m.contains("429") -> "请求太频繁被限流了，过一会儿再试"
+                    m.isBlank() -> "抓不到这个页面"
+                    else -> m
+                }
+            )
+        }
+
     /** telegra.ph 图文页（含页面内“下一页”追踪） */
     private suspend fun loadTelegraph(url: String): TelegraphParser.Article {
-        val html = Net.getText(url)
+        val html = fetchTelegraphHtml(url)
+        return expandTelegraph(TelegraphParser.parse(html, url), html, url)
+    }
+
+    /**
+     * telegra.ph 的导入入口：普通文章返回 1 篇；「目录 / 合集」页展开成多篇。
+     * 目录页（正文没图、全是指向别的 telegra 文章的链接）当一册导进来只有 1~2 页，没意义。
+     */
+    private suspend fun loadTelegraphTree(url: String): List<TelegraphParser.Article> {
+        val html = fetchTelegraphHtml(url)
         val base = TelegraphParser.parse(html, url)
+        val entries = TelegraphParser.indexEntries(html, url, base.images.size)
+        if (entries.isEmpty()) return listOf(expandTelegraph(base, html, url))
+
+        val out = mutableListOf<TelegraphParser.Article>()
+        for (e in entries.take(MAX_INDEX_ITEMS)) {
+            val art = runCatching { loadTelegraph(e.url) }.getOrNull() ?: continue
+            if (art.images.isEmpty()) continue
+            // 标题为空就用目录里的锚点文字
+            out.add(if (art.title.isBlank() || art.title == "未命名") art.copy(title = e.title) else art)
+        }
+        if (out.isEmpty()) {
+            throw IllegalStateException(
+                "这个 telegra.ph 页面是目录，但里面 ${entries.size} 篇文章都没取到图（链接可能已失效）"
+            )
+        }
+        return out
+    }
+
+    /** 接着当前页的 html 往后跟「下一页」 */
+    private suspend fun expandTelegraph(
+        base: TelegraphParser.Article,
+        firstHtml: String,
+        url: String
+    ): TelegraphParser.Article {
         val imgs = base.images.toMutableList()
         val seen = HashSet<String>()
         seen.add(TelegraphParser.cleanUrl(url))
-        var curHtml = html
+        var curHtml = firstHtml
         var curUrl = url
         var guard = 0
         // 长文常常拆成 2~4 页，作者用「下一页 / Next / Part 2」串起来
@@ -381,8 +433,17 @@ class MainActivity : ComponentActivity() {
             guard++
         }
         if (imgs.isEmpty()) {
+            // 很多「合集」页其实是 ed2k / 磁力清单，不是图片页 —— 提示要说到点上
+            val plain = TelegraphParser.plainText(firstHtml)
             throw IllegalStateException(
-                "这个 telegra.ph 页面里没有找到图片（可能只有文字、外链视频，或图片放在别的站点）"
+                when {
+                    plain.contains("ed2k://") || plain.contains("magnet:?") ->
+                        "这页只有 ed2k / 磁力下载链接，没有可以在线看的图片"
+                    plain.contains(".torrent") ->
+                        "这页是种子/下载清单，没有可以在线看的图片"
+                    else ->
+                        "这个 telegra.ph 页面里没有找到图片（可能只有文字、外链视频，或图片放在别的站点）"
+                }
             )
         }
         return base.copy(images = imgs, cover = imgs.firstOrNull().orEmpty())
@@ -478,13 +539,20 @@ class MainActivity : ComponentActivity() {
             for ((i, u) in targets.withIndex()) {
                 importState = ImportState.Loading(u, targets.size, i)
                 try {
-                    val art = loadArticle(u)
-                    if (art.images.isEmpty()) {
+                    // telegra.ph 可能是「目录 / 合集」页，展开成多册
+                    val arts: List<TelegraphParser.Article> =
+                        if (TelegraphParser.isTelegraphArticle(u)) loadTelegraphTree(u)
+                        else listOf(loadArticle(u))
+                    var added = 0
+                    for (art in arts) {
+                        if (art.images.isEmpty()) continue
+                        parsed.add(Parsed(art.url, art.title, art.author, art.images, art.cover))
+                        added++
+                    }
+                    if (added == 0) {
                         lastErr = "页面里没找到图片"
                         failedUrl = u
-                        lib.addLink(u, art.title, "fail", lastErr)
-                    } else {
-                        parsed.add(Parsed(u, art.title, art.author, art.images, art.cover))
+                        lib.addLink(u, arts.firstOrNull()?.title ?: "未知标题", "fail", lastErr)
                     }
                 } catch (e: Exception) {
                     lastErr = e.message ?: "网络或解析异常"

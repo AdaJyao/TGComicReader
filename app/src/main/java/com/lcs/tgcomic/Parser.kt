@@ -81,6 +81,10 @@ object TelegraphParser {
 
     fun isTelegraphFile(url: String): Boolean = TELEGRAPH_FILE_RE.containsMatchIn(url.trim())
 
+    /** telegra.ph 的文章页（不是图床直链） */
+    fun isTelegraphArticle(url: String): Boolean =
+        TELEGRAPH_RE.containsMatchIn(url.trim()) && !isTelegraphFile(url)
+
     /** 图片直链的标题：用文件名；telegra.ph 的 /file/<hash> 没名字，就用「telegra 图片」 */
     fun imageTitle(url: String): String {
         val name = url.substringAfterLast('/').substringBefore('?').trim()
@@ -126,6 +130,9 @@ object TelegraphParser {
         val images: List<String>,
         val cover: String = ""
     )
+
+    /** 目录/合集页里的一条：标题（锚点文字）+ 目标文章地址 */
+    data class IndexEntry(val title: String, val url: String)
 
     /** 从任意文本里找第一个可解析链接 */
     fun findUrl(text: String?): String? = text?.let { findAllUrls(it).firstOrNull() }
@@ -178,7 +185,20 @@ object TelegraphParser {
             val text = block.value
             val inner = IMG_TAG.find(text)
             if (inner != null) {
-                pickImgUrl(inner.value)?.let { push(it) }
+                val fromImg = pickImgUrl(inner.value)
+                val href = ATTR.findAll(text.substringBefore('>') + ">")
+                    .firstOrNull { it.groupValues[1].equals("href", true) }
+                    ?.groupValues?.get(2)
+                val full = href?.let { h ->
+                    absolute(h, pageUrl)?.takeIf { isImageUrl(it) || isTelegraphFile(it) }
+                }
+                // 缩略图带 ?w=600 这类缩放参数、而外层 <a> 指向同名原图时，用原图
+                val chosen = when {
+                    fromImg == null -> full
+                    full != null && sameName(full, fromImg) && fromImg.contains('?') -> full
+                    else -> fromImg
+                }
+                chosen?.let { push(it) }
             } else {
                 // 纯文字锚点里挂的原图直链
                 val open = text.substringBefore('>') + ">"
@@ -203,6 +223,8 @@ object TelegraphParser {
     private fun pickImgUrl(tag: String): String? {
         val attrs = LinkedHashMap<String, String>()
         for (m in ATTR.findAll(tag)) attrs[m.groupValues[1].lowercase()] = m.groupValues[2]
+        // srcset 里一般同时放了多个尺寸，挑描述符最大的那个
+        (attrs["srcset"] ?: attrs["data-srcset"])?.let { bestSrcset(it) }?.let { return it }
         val order = listOf(
             "data-original", "data-src", "data-lazy-src", "data-actualsrc", "data-echo", "src"
         )
@@ -211,6 +233,36 @@ object TelegraphParser {
             if (v.isNotEmpty() && !v.startsWith("data:")) return v
         }
         return null
+    }
+
+    /** "a.jpg 800w, b.jpg 1600w" / "a.jpg 1x, b.jpg 2x" → 最大那份 */
+    private fun bestSrcset(raw: String): String? {
+        var best: String? = null
+        var bestScore = -1.0
+        for (part in raw.split(',')) {
+            val bits = part.trim().split(Regex("""\s+"""))
+            val url = bits.firstOrNull()?.trim().orEmpty()
+            if (url.isEmpty() || url.startsWith("data:")) continue
+            val desc = bits.getOrNull(1).orEmpty().lowercase()
+            val score = when {
+                desc.endsWith("w") -> desc.dropLast(1).toDoubleOrNull() ?: 0.0
+                desc.endsWith("x") -> (desc.dropLast(1).toDoubleOrNull() ?: 0.0) * 10000
+                else -> 1.0
+            }
+            if (score > bestScore) {
+                bestScore = score
+                best = url
+            }
+        }
+        return best
+    }
+
+    /** 两个地址是不是同一张图（只比文件名，不含目录和扩展名） */
+    private fun sameName(a: String, b: String): Boolean {
+        fun base(u: String) = u.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
+        val x = base(a)
+        val y = base(b)
+        return x.isNotEmpty() && x == y
     }
 
     /** 相对路径补全；返回 null 表示这行不该要 */
@@ -292,6 +344,54 @@ object TelegraphParser {
         return null
     }
 
+    /**
+     * 目录 / 合集页：正文没几张图，全是指向**别的 telegra.ph 文章**的链接。
+     * 这种页面当一册导入只有 1~2 页，没意义；调用方应该把它们展开成多册。
+     */
+    fun indexEntries(html: String, pageUrl: String, imageCount: Int): List<IndexEntry> {
+        // 只有「一张图都没有、却挂了好几篇文章链接」才算目录页；
+        // 有图的页面照常当一册导入（底下挂的“相关推荐”不该被展开成好几册）
+        if (imageCount > 0) return emptyList()
+        val scope = ARTICLE.find(html)?.groupValues?.get(1) ?: html
+        val out = LinkedHashMap<String, IndexEntry>()
+        for (a in ANCHOR.findAll(scope)) {
+            val href = ATTR.findAll(a.groupValues[1])
+                .firstOrNull { it.groupValues[1].equals("href", true) }
+                ?.groupValues?.get(2) ?: continue
+            val abs = if (href.startsWith("http", true)) href else
+                runCatching { java.net.URI(pageUrl).resolve(href).toString() }.getOrNull() ?: continue
+            val u = cleanUrl(abs)
+            // 只认「文章」链接：图床 /file/、站外地址、自身、参数化的分享链接都排除
+            if (!TELEGRAPH_RE.containsMatchIn(u) || isTelegraphFile(u)) continue
+            if (u.substringAfter("://").contains('?')) continue
+            if (u == cleanUrl(pageUrl)) continue
+            val path = runCatching { java.net.URI(u).path.orEmpty() }.getOrDefault("")
+            // 文章地址是一级路径、且 slug 里没有点；`/konachan.com` 这种其实是作者漏写协议的站外链接
+            if (path.isBlank() || path == "/" || path.count { it == '/' } > 1) continue
+            if (path.contains('.')) continue
+            if (PATH_RESERVED.contains(path.trim('/').lowercase())) continue
+            val text = decode(TAG.replace(a.groupValues[2], " "))
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+            if (text.length !in 2..80) continue
+            if (text.contains('.')) continue                     // "konachan.com" 这种不是文章标题
+            if (NEXT_TEXT.containsMatchIn(text) || PREV_TEXT.containsMatchIn(text)) continue
+            if (out.containsKey(u)) continue
+            out[u] = IndexEntry(text, u)
+        }
+        return if (out.size >= 3) out.values.toList() else emptyList()
+    }
+
+    private val ANCHOR = Regex(
+        """<a\b([^>]*)>(.*?)</a>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    /** telegra.ph 自己的功能性路径，不是文章 */
+    private val PATH_RESERVED = setOf(
+        "account", "create", "updates", "version", "login", "search", "file", "about", "faq"
+    )
+
     private val NEXT_TEXT = Regex(
         """^(?:下一?[页頁篇章张張]|下|続き|次へ|next|continue|part\s*\d+|more|[›»→]|&raquo;|&rarr;|第\s*\d+\s*[页頁]|[2-9]\s*[\/|]\s*\d+)""",
         RegexOption.IGNORE_CASE
@@ -300,6 +400,11 @@ object TelegraphParser {
         """^(?:上一?[页頁篇章]|前|prev|back|[‹«←]|&laquo;|&larr;)""",
         RegexOption.IGNORE_CASE
     )
+
+    /** 去掉标签后的正文纯文本：用来判断「这页到底有没有图、是不是下载清单」 */
+    fun plainText(html: String): String =
+        decode(TAG.replace(ARTICLE.find(html)?.groupValues?.get(1) ?: html, " "))
+            .replace(Regex("""\s+"""), " ")
 
     private fun decode(s: String): String {
         var t = s
