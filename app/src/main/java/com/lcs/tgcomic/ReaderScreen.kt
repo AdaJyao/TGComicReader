@@ -150,6 +150,17 @@ fun ReaderScreen(
         }
     }
 
+    // 邻页预取：禁漫的图下载 + 还原要几百毫秒，先备好下一页，滚过去就不会空一下再闪出来
+    LaunchedEffect(comic.id, current) {
+        val app = ctx.applicationContext as? TgApp ?: return@LaunchedEffect
+        for (d in intArrayOf(1, 2)) {
+            val i = current + d
+            if (i > last) break
+            val u = comic.pages.getOrNull(i) ?: continue
+            JmWarmer.warm(ctx, pageFileOf(ctx, comic.id, i), u, app.okHttp)
+        }
+    }
+
     val keyFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { keyFocus.requestFocus() } }
 
@@ -207,6 +218,7 @@ fun ReaderScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 contentScale = ContentScale.FillWidth,
                                 desc = "第${i + 1}页",
+                                pageIndex = i,
                                 onRetry = { retry++ }
                             )
                         } else {
@@ -255,6 +267,7 @@ fun ReaderScreen(
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit,
                             desc = "第${page + 1}页",
+                            pageIndex = page,
                             onRetry = { retry++ }
                         )
                     } else {
@@ -434,6 +447,7 @@ fun ReaderScreen(
                             },
                         contentScale = ContentScale.Fit,
                         desc = "第${idx + 1}页",
+                        pageIndex = idx,
                         onRetry = { zRetry++ }
                     )
                 } else {
@@ -611,6 +625,7 @@ private fun PageView(
     modifier: Modifier,
     contentScale: ContentScale,
     desc: String,
+    pageIndex: Int = 0,
     onRetry: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -641,7 +656,7 @@ private fun PageView(
     Box(modifier, contentAlignment = Alignment.Center) {
         when (val m = cur) {
             is java.io.File -> AsyncImage(
-                model = ImageRequest.Builder(ctx).data(m).crossfade(120).build(),
+                model = rememberImage(m, crossfadeMs = 90) { c -> ImageRequest.Builder(c).data(m) },
                 contentDescription = desc,
                 modifier = Modifier.fillMaxWidth().wrapContentHeight(),
                 contentScale = contentScale
@@ -653,7 +668,7 @@ private fun PageView(
                     PendingPage(index = 0, failed = true, message = "这一页没有地址", onClick = onRetry)
                 } else {
                     AsyncImage(
-                        model = ImageRequest.Builder(ctx).data(m).crossfade(true).build(),
+                        model = rememberImage(m) { c -> ImageRequest.Builder(c).data(m) },
                         contentDescription = desc,
                         modifier = Modifier.fillMaxWidth().wrapContentHeight(),
                         contentScale = contentScale,

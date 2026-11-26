@@ -96,10 +96,9 @@ fun DetailScreen(
                                 .border(1.dp, Glass.MediaStroke, RoundedCornerShape(14.dp))
                         ) {
                             AsyncImage(
-                                model = ImageRequest.Builder(ctx)
-                                    .data(coverModel(ctx, comic))
-                                    .crossfade(true)
-                                    .build(),
+                                model = rememberImage(comic.id, crossfadeMs = 120) { c ->
+                                    ImageRequest.Builder(c).data(coverModel(ctx, comic))
+                                },
                                 contentDescription = comic.title,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
@@ -244,7 +243,9 @@ fun DetailScreen(
                                             .border(1.dp, Glass.MediaStroke, RoundedCornerShape(10.dp))
                                     ) {
                                         AsyncImage(
-                                            model = ImageRequest.Builder(ctx).data(model).crossfade(true).build(),
+                                            model = rememberImage(model, crossfadeMs = 90) { c ->
+                                                ImageRequest.Builder(c).data(model)
+                                            },
                                             contentDescription = null,
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()

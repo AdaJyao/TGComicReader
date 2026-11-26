@@ -61,7 +61,8 @@ class TgApp : Application(), ImageLoaderFactory {
     }
 
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
-        .crossfade(180)
+        // 全局不淡入：淡入由各个 request 自己决定（阅读器里一律关掉，否则每次重载都闪一下）
+        .crossfade(false)
         .components {
             // 禁漫的图片要先还原打乱的切片，否则每页都是错位的横条
             add(JmImageKeyer())
@@ -69,7 +70,7 @@ class TgApp : Application(), ImageLoaderFactory {
         }
         .memoryCache {
             MemoryCache.Builder(this)
-                .maxSizePercent(0.25)
+                .maxSizePercent(0.30)
                 .build()
         }
         .diskCache {

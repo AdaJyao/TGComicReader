@@ -305,11 +305,9 @@ fun DiscoverScreen(
             val d = detail
             Row(Modifier.fillMaxWidth()) {
                 AsyncImage(
-                    model = ImageRequest.Builder(ctx)
-                        .data(d?.cover?.ifBlank { item.cover } ?: item.cover)
-                        .size(400, 560)
-                        .crossfade(true)
-                        .build(),
+                    model = rememberImage(item.url, d?.cover, crossfadeMs = 120) { c ->
+                        ImageRequest.Builder(c).data(d?.cover?.ifBlank { item.cover } ?: item.cover).size(400, 560)
+                    },
                     contentDescription = null,
                     modifier = Modifier
                         .width(120.dp)
@@ -398,7 +396,9 @@ private fun DiscoverCard(item: FoundItem, onClick: () -> Unit) {
         ) {
             if (item.cover.isNotBlank()) {
                 AsyncImage(
-                    model = ImageRequest.Builder(ctx).data(item.cover).size(400, 540).crossfade(true).build(),
+                    model = rememberImage(item.cover, crossfadeMs = 120) { c ->
+                        ImageRequest.Builder(c).data(item.cover).size(400, 540)
+                    },
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop

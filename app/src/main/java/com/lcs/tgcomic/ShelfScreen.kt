@@ -741,7 +741,9 @@ private fun ComicTile(
                 .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(ctx).data(cover).size(360, 480).crossfade(true).build(),
+                model = rememberImage(cover, crossfadeMs = 120) { c ->
+                    ImageRequest.Builder(c).data(cover).size(360, 480)
+                },
                 contentDescription = comic.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -898,7 +900,9 @@ private fun ComicRow(
                 .combinedClickable(onClick = { onRead() }, onLongClick = { onLongClick() })
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(ctx).data(cover).size(240, 320).crossfade(true).build(),
+                model = rememberImage(cover, crossfadeMs = 120) { c ->
+                    ImageRequest.Builder(c).data(cover).size(240, 320)
+                },
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()

@@ -13,8 +13,8 @@ android {
         applicationId = "com.lcs.tgcomic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 61
-        versionName = "2.41"
+        versionCode = 62
+        versionName = "2.42"
     }
 
     buildTypes {

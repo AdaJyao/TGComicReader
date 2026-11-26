@@ -55,7 +55,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Dp
+
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -438,7 +439,9 @@ fun ImportDialogs(
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(previews) { u ->
                             AsyncImage(
-                                model = ImageRequest.Builder(ctx).data(u).crossfade(true).build(),
+                                model = rememberImage(u, crossfadeMs = 90) { c ->
+                                    ImageRequest.Builder(c).data(u)
+                                },
                                 contentDescription = null,
                                 modifier = Modifier.size(54.dp).clip(RoundedCornerShape(8.dp)),
                                 contentScale = ContentScale.Crop
