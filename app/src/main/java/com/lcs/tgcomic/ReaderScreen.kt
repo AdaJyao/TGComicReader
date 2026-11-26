@@ -621,7 +621,7 @@ private fun PageView(
     // 那个 scope 一旦随重建离开组合就会抛「The coroutine scope left the composition」）
     LaunchedEffect(phase, model) {
         if (phase != 1) return@LaunchedEffect
-        val remote = cur as? String ?: return@LaunchedEffect
+        val remote = (cur as? String) ?: (cur as? JmImage)?.url ?: return@LaunchedEffect
         val target = file
         if (target == null) {
             phase = 2
@@ -647,12 +647,13 @@ private fun PageView(
                 contentScale = contentScale
             )
             else -> {
-                val remote = m as? String
+                // 禁漫的页是 JmImage（下载后要先还原切片），其它来源是普通地址字符串
+                val remote = (m as? String) ?: (m as? JmImage)?.url
                 if (remote == null) {
                     PendingPage(index = 0, failed = true, message = "这一页没有地址", onClick = onRetry)
                 } else {
                     AsyncImage(
-                        model = ImageRequest.Builder(ctx).data(remote).crossfade(true).build(),
+                        model = ImageRequest.Builder(ctx).data(m).crossfade(true).build(),
                         contentDescription = desc,
                         modifier = Modifier.fillMaxWidth().wrapContentHeight(),
                         contentScale = contentScale,

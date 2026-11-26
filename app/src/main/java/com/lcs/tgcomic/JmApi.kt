@@ -115,13 +115,10 @@ object JmApi {
             val title = H1.find(html)?.groupValues?.get(1)?.let { unescape(it) }?.trim().orEmpty()
                 .ifBlank { "18comic-$aid" }
             val author = AUTHOR.find(html)?.groupValues?.get(1)?.let { unescape(it) }?.trim().orEmpty()
-            // 相册页的章节列表通常是「最新在前」，按 cid 升序还原阅读顺序，
-            // 否则合并成多话之后页序会整个反掉
-            val chapters = PHOTO_ID_IN_PAGE.findAll(html)
-                .map { it.groupValues[1] }
-                .distinct()
-                .sortedBy { it.toLongOrNull() ?: 0L }
-                .toList()
+            // 章节顺序按站点自己的 data-index 排（相册页的列表是无序/最新在前的，
+            // 直接按 cid 猜在某些「后补第 1 话」的相册上会把顺序弄反）。
+            // 只认带 data-album 的章节锚点，免得把「開始閱讀」按钮、相关推荐里的 /photo/ 也当成一章。
+            val chapters = chaptersOf(html)
             val pages = ArrayList<String>()
             val list = chapters.ifEmpty { listOf(aid) }
             list.forEachIndexed { i, cid ->
@@ -155,9 +152,41 @@ object JmApi {
 
     private suspend fun chapterPages(cid: String): List<String> = pagesOf(get("$HOME/photo/$cid"), cid)
 
+    private val CHAPTER_ANCHOR = Regex(
+        """<a\b[^>]*?href="/photo/(\d+)"[^>]*?data-(?:album|index)="\d+"""",
+        RegexOption.IGNORE_CASE
+    )
+    private val DATA_INDEX = Regex("""data-index="(\d+)"""")
+
+    /**
+     * 相册里的章节，按站点自己的 data-index 升序（就是阅读顺序）。
+     * 相册页把「開始閱讀」按钮也写成 /photo/&lt;第一话&gt;，还有各种相关推荐，
+     * 所以只认带 data-album / data-index 的章节锚点。
+     */
+    private fun chaptersOf(html: String): List<String> {
+        val out = LinkedHashMap<String, Int>()
+        var fallback = 0
+        for (m in CHAPTER_ANCHOR.findAll(html)) {
+            val cid = m.groupValues[1]
+            val idx = DATA_INDEX.find(m.value)?.groupValues?.get(1)?.toIntOrNull() ?: (fallback++)
+            out.putIfAbsent(cid, idx)
+        }
+        if (out.isEmpty()) {
+            // 站点改版兜底：退回「所有 /photo/ 链接 + 按 cid 升序」
+            return PHOTO_ID_IN_PAGE.findAll(html)
+                .map { it.groupValues[1] }
+                .distinct()
+                .sortedBy { it.toLongOrNull() ?: 0L }
+                .toList()
+        }
+        return out.entries.sortedBy { it.value }.map { it.key }
+    }
+
     private fun pagesOf(html: String, cid: String): List<String> {
         val arr = PAGE_ARR.find(html)?.groupValues?.get(1) ?: return emptyList()
-        val dir = PHOTOS_DIR.find(html)?.groupValues?.get(1) ?: cid
+        // 图片目录就是这一话的 cid；正则只当兜底（页面里别的区块也可能出现 photos/xxx/）
+        val dir = Regex("""/photos/$cid/""").find(html)?.let { cid }
+            ?: PHOTOS_DIR.find(html)?.groupValues?.get(1) ?: cid
         return QUOTED.findAll(arr)
             .map { it.groupValues[1] }
             .filter { it.endsWith(".webp") || it.endsWith(".jpg") || it.endsWith(".png") }

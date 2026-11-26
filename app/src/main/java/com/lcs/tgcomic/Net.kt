@@ -195,6 +195,8 @@ object Net {
                     runCatching { dest.delete() }
                     return@withContext false
                 }
+                // 禁漫：缓存文件必须是还原后的，离线看图才不会一条条错位
+                JmScramble.parse(url)?.let { JmScramble.decodeInPlace(dest, it) }
                 true
             } catch (e: Exception) {
                 runCatching { dest.delete() }

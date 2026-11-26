@@ -105,12 +105,24 @@ fun pageFileOf(ctx: Context, comicId: String, index: Int): File =
 
 fun pageModel(ctx: Context, comicId: String, index: Int, url: String): Any {
     val f = pageFileOf(ctx, comicId, index)
-    return if (f.exists() && f.length() > 1024) f else url
+    val cached = if (f.exists() && f.length() > 1024) f else null
+    // 禁漫的图是切片打乱的：远端和本地都要过还原这一步。
+    // 已还原过的缓存有 .jm 标记，直接读文件；没有标记的（老版本存下的原图）交给
+    // Fetcher 还原一次并回写，所以不能像别的来源那样直接把 File 丢给 Coil。
+    JmScramble.parse(url)?.let { info ->
+        if (cached != null && JmScramble.isDecoded(cached)) return cached
+        return JmImage(url, info, cached)
+    }
+    return cached ?: url
 }
 
 /** 封面：优先用存下来的缩略图（EH），否则退回第一页 */
 fun coverModel(ctx: Context, comic: Comic): Any {
-    if (comic.cover.isNotBlank()) return comic.cover
+    if (comic.cover.isNotBlank()) {
+        // 禁漫的封面也是打乱过的原图，同样要走还原
+        JmScramble.parse(comic.cover)?.let { return JmImage(comic.cover, it) }
+        return comic.cover
+    }
     return pageModel(ctx, comic.id, 0, comic.pages.firstOrNull() ?: "")
 }
 

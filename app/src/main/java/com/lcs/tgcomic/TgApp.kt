@@ -62,6 +62,11 @@ class TgApp : Application(), ImageLoaderFactory {
 
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
         .crossfade(180)
+        .components {
+            // 禁漫的图片要先还原打乱的切片，否则每页都是错位的横条
+            add(JmImageKeyer())
+            add(JmImageFetcherFactory(okHttp))
+        }
         .memoryCache {
             MemoryCache.Builder(this)
                 .maxSizePercent(0.25)
