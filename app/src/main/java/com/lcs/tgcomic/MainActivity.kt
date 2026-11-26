@@ -37,6 +37,8 @@ class MainActivity : ComponentActivity() {
         const val MAX_BATCH_TARGETS = 60
         /** 一个 telegra.ph 目录页最多展开多少篇 */
         const val MAX_INDEX_ITEMS = 24
+        /** 单条 Telegram 消息里最多跟进多少篇 telegra 文章 */
+        const val MAX_TG_LINKS = 8
     }
 
     private lateinit var lib: Library
@@ -469,13 +471,17 @@ class MainActivity : ComponentActivity() {
         val imgs = LinkedHashSet<String>()
         var title = ""
         var author = channel.name
+        // 一条消息里可能贴了好几篇 telegra 文章（合集/合集续），全部跟进，别只取前三条
+        val followed = LinkedHashSet<String>()
 
         for (p in channel.posts) {
             p.images.forEach { imgs.add(it) }
             if (title.isBlank() && p.text.isNotBlank()) {
                 title = p.text.replace(Regex("""\s+"""), " ").trim().take(48)
             }
-            for (link in p.links.take(3)) {
+            for (link in p.links) {
+                if (followed.size >= MAX_TG_LINKS) break
+                if (!followed.add(link)) continue
                 runCatching {
                     val art = loadTelegraph(link)
                     art.images.forEach { imgs.add(it) }

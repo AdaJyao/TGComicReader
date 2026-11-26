@@ -30,6 +30,16 @@ object TelegraphParser {
     )
     private val IMG_TAG = Regex("""<img\b[^>]*>""", setOf(RegexOption.IGNORE_CASE))
     private val ATTR = Regex("""([\w-]+)\s*=\s*["']([^"']*)["']""")
+    private val PICTURE = Regex(
+        """<picture\b[^>]*>(.*?)</picture>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+    private val SOURCE_SRCSET = Regex(
+        """<source\b[^>]*?\b(?:srcset|data-srcset)\s*=\s*["']([^"']+)["']""",
+        setOf(RegexOption.IGNORE_CASE)
+    )
+    /** HTML 注释里被注释掉的图不算（编辑过页面常留下） */
+    private val COMMENT = Regex("""<!--.*?-->""", setOf(RegexOption.DOT_MATCHES_ALL))
 
     /**
      * 占位图 / 跟踪像素 / 视频封面之类：作者在正文里插的这些东西不是漫画页，
@@ -169,7 +179,8 @@ object TelegraphParser {
         val title = extractTitle(html)
         val author = extractAuthor(html)
 
-        val scope = ARTICLE.find(html)?.groupValues?.get(1) ?: html
+        val cleaned = flattenPictures(COMMENT.replace(html, " "))
+        val scope = ARTICLE.find(cleaned)?.groupValues?.get(1) ?: cleaned
         val imgs = LinkedHashSet<String>()
         val seen = HashSet<String>()
 
@@ -211,8 +222,8 @@ object TelegraphParser {
 
         if (imgs.size < 2) {
             // 有些页面图在 article 外，或只有 og:image
-            IMG_SRC.findAll(html).forEach { push(it.groupValues[1]) }
-            IMG_SRC_ALT.findAll(html).forEach { push(it.groupValues[1]) }
+            IMG_SRC.findAll(cleaned).forEach { push(it.groupValues[1]) }
+            IMG_SRC_ALT.findAll(cleaned).forEach { push(it.groupValues[1]) }
             OG_IMAGE.find(html)?.groupValues?.get(1)?.let { push(it) }
         }
 
@@ -224,9 +235,11 @@ object TelegraphParser {
         val attrs = LinkedHashMap<String, String>()
         for (m in ATTR.findAll(tag)) attrs[m.groupValues[1].lowercase()] = m.groupValues[2]
         // srcset 里一般同时放了多个尺寸，挑描述符最大的那个
-        (attrs["srcset"] ?: attrs["data-srcset"])?.let { bestSrcset(it) }?.let { return it }
+        (attrs["srcset"] ?: attrs["data-srcset"])?.let { srcsetBest(it)?.first }?.let { return it }
         val order = listOf(
-            "data-original", "data-src", "data-lazy-src", "data-actualsrc", "data-echo", "src"
+            "data-original", "data-original-src", "data-src", "data-lazy-src", "data-actualsrc",
+            "data-actual-src", "data-echo", "data-full", "data-large", "data-zoom-src",
+            "data-image", "src"
         )
         for (k in order) {
             val v = attrs[k]?.trim().orEmpty()
@@ -235,10 +248,9 @@ object TelegraphParser {
         return null
     }
 
-    /** "a.jpg 800w, b.jpg 1600w" / "a.jpg 1x, b.jpg 2x" → 最大那份 */
-    private fun bestSrcset(raw: String): String? {
-        var best: String? = null
-        var bestScore = -1.0
+    /** "a.jpg 800w, b.jpg 1600w" / "a.jpg 1x, b.jpg 2x" → 最大那份（带分数，方便跨 srcset 比较） */
+    private fun srcsetBest(raw: String): Pair<String, Double>? {
+        var best: Pair<String, Double>? = null
         for (part in raw.split(',')) {
             val bits = part.trim().split(Regex("""\s+"""))
             val url = bits.firstOrNull()?.trim().orEmpty()
@@ -249,12 +261,20 @@ object TelegraphParser {
                 desc.endsWith("x") -> (desc.dropLast(1).toDoubleOrNull() ?: 0.0) * 10000
                 else -> 1.0
             }
-            if (score > bestScore) {
-                bestScore = score
-                best = url
-            }
+            if (best == null || score > best.second) best = url to score
         }
         return best
+    }
+
+    /** <picture><source srcset="大图"><img src="小图"></picture> → 统一成一张最大尺寸的 <img> */
+    private fun flattenPictures(html: String): String = PICTURE.replace(html) { m ->
+        val inner = m.groupValues[1]
+        val fromSources = SOURCE_SRCSET.findAll(inner)
+            .mapNotNull { srcsetBest(it.groupValues[1]) }
+            .maxByOrNull { it.second }
+        val fromImg = IMG_TAG.find(inner)?.value?.let { pickImgUrl(it) }
+        val chosen = fromSources?.first ?: fromImg
+        if (chosen == null) "" else """<img src="$chosen">"""
     }
 
     /** 两个地址是不是同一张图（只比文件名，不含目录和扩展名） */
