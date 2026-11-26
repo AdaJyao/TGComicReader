@@ -225,3 +225,34 @@ private class JmImageFetcher(
         return s
     }
 }
+
+/**
+ * 一次性清理旧缓存。
+ *
+ * 2.46 及更早的版本把禁漫每一页「解码 → 重排 → 重压成 JPEG」后缓存/显示，重压会让黑白漫的
+ * 深色区域泛出淡淡色偏。升级到 2.48 后统一用原图，旧文件必须清掉，否则读到的还是重压过的画面。
+ */
+object JmLegacyCache {
+    private const val MARK = "jm_raw_v1"
+
+    fun migrate(ctx: Context) {
+        runCatching {
+            val mark = File(ctx.cacheDir, ".$MARK")
+            if (mark.exists()) return
+            // 自己磁盘缓存里重压过的 JPEG
+            File(ctx.cacheDir, "jm").listFiles()?.forEach {
+                if (it.name.endsWith(".dec")) it.delete()
+            }
+            // 「缓存整册」下被旧版还原并重压过的页（旁边有 .jm 标记）
+            File(ctx.filesDir, "comics").listFiles()?.forEach { book ->
+                book.listFiles()?.forEach { f ->
+                    if (f.name.endsWith(".img.jm")) {
+                        File(f.parentFile, f.name.removeSuffix(".jm")).delete()
+                        f.delete()
+                    }
+                }
+            }
+            mark.writeText("1")
+        }
+    }
+}

@@ -20,6 +20,12 @@ import java.util.concurrent.TimeUnit
  */
 class TgApp : Application(), ImageLoaderFactory {
 
+    override fun onCreate() {
+        super.onCreate()
+        // 旧版本把禁漫每页重压成 JPEG 缓存（深色区会泛色），升级后清掉，按原图重下
+        Thread { runCatching { JmLegacyCache.migrate(this) } }.start()
+    }
+
     val okHttp: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
