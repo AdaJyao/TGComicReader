@@ -30,6 +30,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -598,6 +602,13 @@ fun PasteDialog(onDismiss: () -> Unit, onImport: (List<String>) -> Unit) {
                 onValueChange = { text = it },
                 textStyle = TextStyle(color = Glass.Text, fontSize = 12.5.sp, lineHeight = 18.sp),
                 cursorBrush = SolidColor(Glass.Accent),
+                // 链接输入框要关掉自动纠正/首字母大写：手打 telegra.ph 会被输入法改成 telegram.ph
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    autoCorrectEnabled = false,
+                    capitalization = KeyboardCapitalization.None,
+                    imeAction = ImeAction.Done
+                ),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp)
             )
         }

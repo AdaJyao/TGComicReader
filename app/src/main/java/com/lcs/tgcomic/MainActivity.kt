@@ -287,7 +287,7 @@ class MainActivity : ComponentActivity() {
             TelegraphParser.isImageUrl(url) -> TelegraphParser.Article(
                 url = url,
                 // 用文件名当标题，别让所有直链都叫「图片直链」被合并成一册
-                title = url.substringAfterLast('/').substringBefore('?').ifBlank { "图片直链" },
+                title = TelegraphParser.imageTitle(url),
                 author = "",
                 images = listOf(url)
             )
@@ -365,18 +365,27 @@ class MainActivity : ComponentActivity() {
         val html = Net.getText(url)
         val base = TelegraphParser.parse(html, url)
         val imgs = base.images.toMutableList()
+        val seen = HashSet<String>()
+        seen.add(TelegraphParser.cleanUrl(url))
         var curHtml = html
         var curUrl = url
         var guard = 0
-        while (guard < 4) {
+        // 长文常常拆成 2~4 页，作者用「下一页 / Next / Part 2」串起来
+        while (guard < 6) {
             val next = TelegraphParser.findNext(curHtml, curUrl) ?: break
-            val nextHtml = Net.getText(next)
+            if (!seen.add(next)) break
+            val nextHtml = runCatching { Net.getText(next) }.getOrNull() ?: break
             TelegraphParser.parse(nextHtml, next).images.forEach { if (!imgs.contains(it)) imgs.add(it) }
             curHtml = nextHtml
             curUrl = next
             guard++
         }
-        return base.copy(images = imgs)
+        if (imgs.isEmpty()) {
+            throw IllegalStateException(
+                "这个 telegra.ph 页面里没有找到图片（可能只有文字、外链视频，或图片放在别的站点）"
+            )
+        }
+        return base.copy(images = imgs, cover = imgs.firstOrNull().orEmpty())
     }
 
     /** t.me 消息 / 频道：取消息里的图片，并递归跟进消息里出现的 telegra.ph 链接 */
