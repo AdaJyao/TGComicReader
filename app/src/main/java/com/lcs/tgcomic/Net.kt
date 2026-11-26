@@ -195,8 +195,7 @@ object Net {
                     runCatching { dest.delete() }
                     return@withContext false
                 }
-                // 禁漫：缓存文件必须是还原后的，离线看图才不会一条条错位
-                JmScramble.parse(url)?.let { JmScramble.decodeInPlace(dest, it) }
+                // 禁漫：这里只存站点原图，还原放到显示时做（重压会掉色，黑白漫深色区会泛色）
                 true
             } catch (e: Exception) {
                 runCatching { dest.delete() }

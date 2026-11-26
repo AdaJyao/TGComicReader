@@ -96,8 +96,8 @@ object JmScramble {
 
     private fun markerOf(file: File) = File(file.parentFile, file.name + ".jm")
 
-    /** 按官方阅读器的算法把竖条倒序拼回来 */
-    private fun reorder(src: Bitmap, num: Int): Bitmap {
+    /** 按官方阅读器的算法把竖条倒序拼回来（返回新位图，原图不动） */
+    internal fun reorder(src: Bitmap, num: Int): Bitmap {
         val w = src.width
         val h = src.height
         val move = h / num

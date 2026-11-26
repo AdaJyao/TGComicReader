@@ -1,14 +1,17 @@
 package com.lcs.tgcomic
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
 import coil.ImageLoader
 import coil.decode.DataSource
-import coil.decode.ImageSource as newImageSource
+import coil.fetch.DrawableResult
 import coil.fetch.FetchResult
 import coil.fetch.Fetcher
-import coil.fetch.SourceResult
 import coil.key.Keyer
 import coil.request.Options
+import coil.size.Dimension
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,7 +19,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Request
-import okio.Buffer
 import java.io.File
 import java.io.IOException
 
@@ -27,7 +29,7 @@ import java.io.IOException
 data class JmImage(
     val url: String,
     val info: JmScramble.Info,
-    /** 已经缓存到本地时直接读文件，但仍然要先还原（老版本的缓存文件是打乱的） */
+    /** 已经缓存到本地时直接读文件 */
     val cached: java.io.File? = null
 )
 
@@ -37,48 +39,61 @@ class JmImageKeyer : Keyer<JmImage> {
     override fun key(data: JmImage, options: Options): String = data.url
 }
 
-/** 还原后的字节留一份在内存里：同一页来回翻不用再切一遍条 */
+/** 取到的一页：原始字节 + 这份字节还需不需要还原 */
+internal class JmBytes(val bytes: ByteArray, val needsReorder: Boolean)
+
+/** 原始字节留一份在内存里：同一页来回翻不用再下载 */
 private object JmByteCache {
     private const val MAX = 32
-    private val map = object : LinkedHashMap<String, ByteArray>(MAX, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>) = size > MAX
+    private val map = object : LinkedHashMap<String, JmBytes>(MAX, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, JmBytes>) = size > MAX
     }
 
     @Synchronized
-    fun get(key: String): ByteArray? = map[key]
+    fun get(key: String): JmBytes? = map[key]
 
     @Synchronized
-    fun put(key: String, bytes: ByteArray) {
-        map[key] = bytes
+    fun put(key: String, value: JmBytes) {
+        map[key] = value
     }
 }
 
 /**
- * 自己落一份磁盘缓存。
+ * 自己的磁盘缓存，存的是**站点原图字节**（不重新压缩）。
  *
- * Coil 的 diskCache 只对 HTTP fetcher 生效，自定义 Fetcher 返回的数据不会写盘 ——
- * 只靠内存缓存的话，滑动稍微远一点就被回收，回到那一页又要重新下载 + 重新切条，
- * 表现出来就是画面一遍遍闪。这里把「还原后的字节」存下来，下次直接从本地读。
- * 文件名带 .dec 后缀，表示已经是还原过的，避免再解一遍（还原是对合变换，解两次就回去了）。
+ * Coil 的 diskCache 只对 HTTP fetcher 生效，自定义 Fetcher 返回的数据不会写盘；
+ * 只靠内存缓存的话滑远一点就没了，回到那一页又要重新下载。
+ *
+ * 两个后缀：
+ *   · `.raw` —— 站点原图，显示时先还原再画（新版本统一用这个）
+ *   · `.dec` —— 老版本重压过的 JPEG（已经是还原后的画面），直接画，别再还原一次
  */
 private object JmDiskCache {
     private const val MAX_FILES = 900
 
-    private fun fileFor(ctx: Context, info: JmScramble.Info): File {
-        val dir = File(ctx.cacheDir, "jm")
-        if (!dir.exists()) dir.mkdirs()
-        return File(dir, "${info.aid}_${info.name}.dec")
-    }
+    private fun dir(ctx: Context): File = File(ctx.cacheDir, "jm").apply { if (!exists()) mkdirs() }
 
-    fun get(ctx: Context, info: JmScramble.Info): ByteArray? {
-        val f = fileFor(ctx, info)
-        if (!f.exists() || f.length() < 512) return null
-        return runCatching { f.readBytes() }.getOrNull()
+    private fun rawFile(ctx: Context, info: JmScramble.Info) =
+        File(dir(ctx), "${info.aid}_${info.name}.raw")
+
+    private fun legacyFile(ctx: Context, info: JmScramble.Info) =
+        File(dir(ctx), "${info.aid}_${info.name}.dec")
+
+    fun get(ctx: Context, info: JmScramble.Info): JmBytes? {
+        val raw = rawFile(ctx, info)
+        if (raw.exists() && raw.length() > 512) {
+            return runCatching { JmBytes(raw.readBytes(), true) }.getOrNull()
+        }
+        val old = legacyFile(ctx, info)
+        if (old.exists() && old.length() > 512) {
+            return runCatching { JmBytes(old.readBytes(), false) }.getOrNull()
+        }
+        return null
     }
 
     fun put(ctx: Context, info: JmScramble.Info, bytes: ByteArray) {
         runCatching {
-            val f = fileFor(ctx, info)
+            val f = rawFile(ctx, info)
             f.writeBytes(bytes)
             trim(f.parentFile)
         }
@@ -94,8 +109,8 @@ private object JmDiskCache {
 }
 
 /**
- * 取「已经还原好」的字节：内存 → 自己的磁盘缓存 → 整册缓存文件 → 网络。
- * 阅读器预取和 Coil 的 Fetcher 都走这里，保证同一张图只下载一次、只切一次条。
+ * 取一页的原始字节：内存 → 自己的磁盘缓存 → 整册缓存文件 → 网络。
+ * 阅读器预取和 Coil 的 Fetcher 都走这里，保证同一张图只下载一次。
  */
 internal suspend fun loadJmBytes(
     ctx: Context,
@@ -103,7 +118,7 @@ internal suspend fun loadJmBytes(
     url: String,
     pageFile: File?,
     callFactory: Call.Factory
-): ByteArray = withContext(Dispatchers.IO) {
+): JmBytes = withContext(Dispatchers.IO) {
     JmByteCache.get(url)?.let { return@withContext it }
 
     JmDiskCache.get(ctx, info)?.let {
@@ -112,12 +127,13 @@ internal suspend fun loadJmBytes(
     }
 
     if (pageFile != null && pageFile.exists() && pageFile.length() > 1024) {
-        // 「缓存整册」下来的文件：老版本的可能是打乱的原图，还原一次并打标记
-        JmScramble.decodeInPlace(pageFile, info)
+        // 老版本的整册缓存是「还原过的 JPEG」（旁边有 .jm 标记）；新版本存原图
+        val done = JmScramble.isDecoded(pageFile)
         val bytes = pageFile.readBytes()
-        JmByteCache.put(url, bytes)
-        if (JmScramble.needsDecode(info)) JmDiskCache.put(ctx, info, bytes)
-        return@withContext bytes
+        val v = JmBytes(bytes, !done)
+        JmByteCache.put(url, v)
+        if (!done) JmDiskCache.put(ctx, info, bytes)
+        return@withContext v
     }
 
     val req = Request.Builder()
@@ -129,16 +145,16 @@ internal suspend fun loadJmBytes(
     callFactory.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
         val bytes = resp.body?.bytes() ?: throw IOException("响应为空")
-        val fixed = JmScramble.decode(bytes, info)
-        JmByteCache.put(url, fixed)
-        if (JmScramble.needsDecode(info)) JmDiskCache.put(ctx, info, fixed)
-        fixed
+        val v = JmBytes(bytes, true)
+        JmByteCache.put(url, v)
+        JmDiskCache.put(ctx, info, bytes)
+        v
     }
 }
 
 /**
- * 邻页预取：滚到下一页时图已经在手里，就不会先空一下再「闪」出来。
- * 只预取禁漫的图（其它来源走 Coil 自己的磁盘缓存，且 EH 要限速）。
+ * 邻页预取：滚到下一页时字节已经在本地，只剩解码 + 还原。
+ * 只预取禁漫（其它来源走 Coil 自己的磁盘缓存，且 EH 要限速）。
  */
 object JmWarmer {
     private val running = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -160,6 +176,13 @@ class JmImageFetcherFactory(private val callFactory: Call.Factory) : Fetcher.Fac
         JmImageFetcher(data, options, callFactory)
 }
 
+/**
+ * 关键：**不重新压缩**。
+ *
+ * 老实现是「解码 → 切条重排 → 压回 JPEG」。重压会让黑白漫画的深色区域泛出淡淡色偏
+ * （JPEG 色度子采样在近黑处最容易显形），和站点浏览器的画面不一致。
+ * 现在直接把排好的位图交给 Coil（DrawableResult），像素与原图完全一致。
+ */
 private class JmImageFetcher(
     private val data: JmImage,
     private val options: Options,
@@ -167,12 +190,38 @@ private class JmImageFetcher(
 ) : Fetcher {
 
     override suspend fun fetch(): FetchResult {
-        val bytes = loadJmBytes(options.context, data.info, data.url, data.cached, callFactory)
-        return SourceResult(
-            source = newImageSource(Buffer().apply { write(bytes) }, options.context.cacheDir),
-            // 还原后是重新压的 JPEG；没打乱的原样透传，交给 Coil 自己嗅探
-            mimeType = if (JmScramble.needsDecode(data.info)) "image/jpeg" else null,
+        val loaded = loadJmBytes(options.context, data.info, data.url, data.cached, callFactory)
+        val sample = sampleSizeFor(loaded.bytes, options)
+        val bmp = BitmapFactory.decodeByteArray(
+            loaded.bytes, 0, loaded.bytes.size,
+            BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+        ) ?: throw IOException("这张图解不开（可能是坏图或封禁页）")
+
+        val src = if (loaded.needsReorder) {
+            val strips = JmScramble.strips(data.info)
+            if (strips >= 2) JmScramble.reorder(bmp, strips) else bmp
+        } else bmp
+
+        return DrawableResult(
+            drawable = BitmapDrawable(options.context.resources, src),
+            isSampled = sample > 1,
             dataSource = DataSource.NETWORK
         )
+    }
+
+    /** 按目标尺寸算 2 的幂采样率，别为了书架缩略图把整张大图解码出来 */
+    private fun sampleSizeFor(bytes: ByteArray, options: Options): Int {
+        val tw = (options.size.width as? Dimension.Pixels)?.px ?: 0
+        val th = (options.size.height as? Dimension.Pixels)?.px ?: 0
+        if (tw <= 0 || th <= 0) return 1
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return 1
+        var s = 1
+        while (bounds.outWidth / (s * 2) >= tw && bounds.outHeight / (s * 2) >= th) s *= 2
+        return s
     }
 }
