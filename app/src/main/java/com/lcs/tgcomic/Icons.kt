@@ -111,8 +111,9 @@ fun GlyphIcon(
 
             // 三个点
             Glyph.MORE_DOTS -> {
-                listOf(0.24f, 0.5f, 0.76f).forEach { x ->
-                    drawCircle(color, radius = 0.062f * u, center = p(x, 0.5f))
+                // 点画大一点：小尺寸图标里 0.062 的半径缩到一两像素，看着像没画东西
+                listOf(0.22f, 0.5f, 0.78f).forEach { x ->
+                    drawCircle(color, radius = 0.095f * u, center = p(x, 0.5f))
                 }
             }
 

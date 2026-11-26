@@ -757,15 +757,29 @@ private fun ComicTile(
                         )
                     )
             )
-            if (comic.favorite) {
-                Text(
-                    "★",
-                    fontSize = 14.sp,
-                    color = Glass.Warn,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(8.dp)
-                )
+            Row(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (comic.favorite) {
+                    Text("★", fontSize = 14.sp, color = Glass.Warn)
+                }
+                // 多话合并过的册子：在封面上标「N 章」，标题下面那行就不会被挤到第二行
+                if (comic.chapterMarks.size > 1) {
+                    if (comic.favorite) Spacer(Modifier.width(4.dp))
+                    Text(
+                        "${comic.chapterMarks.size} 章",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Glass.Text,
+                        modifier = Modifier
+                            .clip(Glass.Pill)
+                            .background(Color(0x99000000))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
             if (cacheState != null) {
                 Box(
@@ -814,35 +828,32 @@ private fun ComicTile(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 9.dp),
-            verticalAlignment = Alignment.Top
+                .padding(start = 10.dp, end = 7.dp, top = 8.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
+                // 固定占两行高：标题长短不一时卡片高度仍然整齐
                 Text(
                     comic.title,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp,
+                    fontSize = 11.5.sp,
+                    lineHeight = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Glass.Text,
+                    minLines = 2,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    (if (comic.chapterMarks.size > 1) "${comic.chapterMarks.size} 章 · " else "") +
-                        "${comic.pages.size} 页 · ${(progress.coerceIn(0f, 1f) * 100).toInt()}%",
+                    "${comic.pages.size} 页 · ${(progress.coerceIn(0f, 1f) * 100).toInt()}%",
                     fontSize = 10.sp,
-                    color = Glass.TextDim
+                    color = Glass.TextDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            Text(
-                "⋯",
-                fontSize = 15.sp,
-                color = Glass.TextDim,
-                modifier = Modifier
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
-                    .clickable { onMenu() }
-            )
+            Spacer(Modifier.width(8.dp))
+            MenuDots(onClick = onMenu)
         }
     }
 }
@@ -945,14 +956,29 @@ private fun ComicRow(
                 }
             }
         }
-        Text(
-            "⋯",
-            fontSize = 16.sp,
-            color = Glass.TextDim,
-            modifier = Modifier
-                .padding(horizontal = 10.dp, vertical = 10.dp)
-                .clickable { onMenu() }
-        )
+        Spacer(Modifier.width(6.dp))
+        MenuDots(onClick = onMenu, size = 30)
+    }
+}
+
+/**
+ * 卡片/列表右侧的「更多」按钮。
+ * 原来是一个灰扑扑的「⋯」字，跟标题同色又没底，很容易被当成装饰忽略掉；
+ * 这里改成有底色和描边的圆点按钮，点按面积也放大到 26–30dp。
+ */
+@Composable
+private fun MenuDots(onClick: () -> Unit, size: Int = 26) {
+    val d = size.dp
+    Box(
+        Modifier
+            .size(d)
+            .clip(Glass.Pill)
+            .background(Glass.palette.surfaceVariant)
+            .border(1.dp, Glass.palette.outline, Glass.Pill)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        GlyphIcon(Glyph.MORE_DOTS, color = Glass.Text, size = d * 0.56f)
     }
 }
 
